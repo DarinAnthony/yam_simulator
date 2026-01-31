@@ -96,7 +96,7 @@ class YamManipEnv(DirectRLEnv):
             device=self.device,
             dtype=torch.float32,
         )
-        radius = self.cfg.start_area_cfg.spawn.radius * 0.95
+        radius = self.cfg.start_area_cfg.spawn.radius * 0.95 if self.cfg.use_start_area_radius else 0.0
         angles = 2.0 * torch.pi * torch.rand((3, num_envs), device=self.device)
         radii = torch.sqrt(torch.rand((3, num_envs), device=self.device)) * radius
         xy_offsets = torch.stack((radii * torch.cos(angles), radii * torch.sin(angles)), dim=-1)
@@ -105,6 +105,7 @@ class YamManipEnv(DirectRLEnv):
             self.cfg.table_cfg.init_state.pos[2]
             + self.cfg.table_cfg.spawn.size[2] / 2.0
             + self.cfg.red_block_cfg.spawn.size[2] / 2.0
+            + self.cfg.block_clearance
         )
         for idx, block in enumerate((self.red_block, self.blue_block, self.yellow_block)):
             block_state = block.data.default_root_state[env_ids].clone()

@@ -35,6 +35,7 @@ WALL_POS = (WALL_X, 0.0, TABLE_HEIGHT + WALL_HEIGHT / 2.0)
 START_AREA_RADIUS = 0.08
 START_AREA_HEIGHT = 0.01
 START_CENTER = (0.30, 0.0, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
+BLOCK_CLEARANCE = 0.001
 DROP_OFF_RADIUS = 0.16
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
@@ -71,6 +72,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=2.0, replicate_physics=True)
+    use_start_area_radius: bool = True
+    block_clearance: float = BLOCK_CLEARANCE
 
     # robot(s)
     robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
