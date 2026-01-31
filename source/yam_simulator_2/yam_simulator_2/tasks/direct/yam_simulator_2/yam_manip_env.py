@@ -32,7 +32,6 @@ class YamManipEnv(DirectRLEnv):
         self.dropoff_blue = RigidObject(self.cfg.dropoff_blue_cfg)
         self.dropoff_yellow = RigidObject(self.cfg.dropoff_yellow_cfg)
         self.start_area = RigidObject(self.cfg.start_area_cfg)
-        self.start_origin = RigidObject(self.cfg.start_origin_cfg)
         self.red_block = RigidObject(self.cfg.red_block_cfg)
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
@@ -48,7 +47,6 @@ class YamManipEnv(DirectRLEnv):
         self.scene.rigid_objects["dropoff_blue"] = self.dropoff_blue
         self.scene.rigid_objects["dropoff_yellow"] = self.dropoff_yellow
         self.scene.rigid_objects["start_area"] = self.start_area
-        self.scene.rigid_objects["start_origin"] = self.start_origin
         self.scene.rigid_objects["red_block"] = self.red_block
         self.scene.rigid_objects["blue_block"] = self.blue_block
         self.scene.rigid_objects["yellow_block"] = self.yellow_block

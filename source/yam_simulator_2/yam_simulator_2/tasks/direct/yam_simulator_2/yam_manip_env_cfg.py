@@ -32,7 +32,7 @@ WALL_HEIGHT = 1.0
 WALL_SIZE = (WALL_THICKNESS, WALL_WIDTH, WALL_HEIGHT)
 WALL_X = (TABLE_SIZE[0] / 2.0) + (WALL_THICKNESS / 2.0) + 0.05
 WALL_POS = (WALL_X, 0.0, TABLE_HEIGHT + WALL_HEIGHT / 2.0)
-DROP_OFF_RADIUS = 0.45
+DROP_OFF_RADIUS = 0.25
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
     (
@@ -54,8 +54,6 @@ DROP_OFF_POSITIONS = (
 DROP_OFF_RADIUS_VIS = 0.05
 START_AREA_RADIUS = 0.08
 START_AREA_HEIGHT = 0.01
-START_ORIGIN_RADIUS = 0.01
-START_ORIGIN_HEIGHT = 0.03
 START_CENTER = (0.30, 0.0, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
 
 
@@ -126,7 +124,12 @@ class YamManipEnvCfg(DirectRLEnvCfg):
                 disable_gravity=True,
             ),
             collision_props=None,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.1, 0.1)),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(1.0, 0.1, 0.1),
+                opacity=0.35,
+                roughness=0.6,
+                metallic=0.0,
+            ),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=DROP_OFF_POSITIONS[0],
@@ -144,7 +147,12 @@ class YamManipEnvCfg(DirectRLEnvCfg):
                 disable_gravity=True,
             ),
             collision_props=None,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 0.2, 1.0)),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.1, 0.2, 1.0),
+                opacity=0.35,
+                roughness=0.6,
+                metallic=0.0,
+            ),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=DROP_OFF_POSITIONS[1],
@@ -162,7 +170,12 @@ class YamManipEnvCfg(DirectRLEnvCfg):
                 disable_gravity=True,
             ),
             collision_props=None,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.9, 0.1)),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(1.0, 0.9, 0.1),
+                opacity=0.35,
+                roughness=0.6,
+                metallic=0.0,
+            ),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=DROP_OFF_POSITIONS[2],
@@ -180,7 +193,12 @@ class YamManipEnvCfg(DirectRLEnvCfg):
                 disable_gravity=True,
             ),
             collision_props=None,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 1.0, 0.2)),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.2, 1.0, 0.2),
+                opacity=0.2,
+                roughness=0.6,
+                metallic=0.0,
+            ),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=START_CENTER,
@@ -188,23 +206,6 @@ class YamManipEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    start_origin_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/StartOrigin",
-        spawn=CylinderCfg(
-            radius=START_ORIGIN_RADIUS,
-            height=START_ORIGIN_HEIGHT,
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            collision_props=None,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 1.0)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(START_CENTER[0], START_CENTER[1], TABLE_HEIGHT + START_ORIGIN_HEIGHT / 2.0),
-            rot=(1.0, 0.0, 0.0, 0.0),
-        ),
-    )
     red_block_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/RedBlock",
         spawn=CuboidCfg(
