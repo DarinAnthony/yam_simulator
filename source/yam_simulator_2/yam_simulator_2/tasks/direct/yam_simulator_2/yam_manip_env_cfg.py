@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
@@ -15,13 +13,7 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.sim.spawners.shapes import CuboidCfg
 from isaaclab.utils import configclass
 
-ASSET_DIR = Path(__file__).resolve().parents[4] / "assets"
-YAM_USD_PATH = (
-    ASSET_DIR
-    / "yam_new"
-    / "yam_st_urdf_with_linear_gripper"
-    / "yam_st_urdf_with_linear_gripper.usd"
-)
+from ....assets import YAM_CFG
 
 INCH = 0.0254
 TABLE_HEIGHT = 0.75
@@ -45,20 +37,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=2.0, replicate_physics=True)
 
     # robot(s)
-    robot_cfg: ArticulationCfg = ArticulationCfg(
-        prim_path="/World/envs/env_.*/Robot",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=str(YAM_USD_PATH),
-            activate_contact_sensors=True,
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=False,
-            ),
-        ),
-        init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, TABLE_HEIGHT),
-            rot=(1.0, 0.0, 0.0, 0.0),
-        ),
-    )
+    robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot_cfg.init_state.pos = (0.0, 0.0, TABLE_HEIGHT)
 
     table_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Table",
