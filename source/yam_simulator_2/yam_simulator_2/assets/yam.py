@@ -43,21 +43,13 @@ YAM_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.95,
     actuators={
+        # USD exposes only joint1..joint8, so bind actuators to those names.
         "arm": ImplicitActuatorCfg(
-            joint_names_expr=["joint[1-6]"],
+            joint_names_expr=["joint[1-8]"],
             effort_limit_sim=60.0,
             velocity_limit_sim=10.0,
             stiffness=0.0,
             damping=1.0,
-            friction=0.0,
-            armature=0.0,
-        ),
-        "gripper": ImplicitActuatorCfg(
-            joint_names_expr=["left_finger_joint", "right_finger_joint"],
-            effort_limit_sim=40.0,
-            velocity_limit_sim=0.2,
-            stiffness=200.0,
-            damping=10.0,
             friction=0.0,
             armature=0.0,
         ),
