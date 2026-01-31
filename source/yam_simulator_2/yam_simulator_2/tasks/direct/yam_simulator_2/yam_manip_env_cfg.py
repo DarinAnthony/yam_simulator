@@ -32,22 +32,22 @@ WALL_HEIGHT = 1.0
 WALL_SIZE = (WALL_THICKNESS, WALL_WIDTH, WALL_HEIGHT)
 WALL_X = (TABLE_SIZE[0] / 2.0) + (WALL_THICKNESS / 2.0) + 0.05
 WALL_POS = (WALL_X, 0.0, TABLE_HEIGHT + WALL_HEIGHT / 2.0)
-DROP_OFF_RADIUS = 0.25
+DROP_OFF_RADIUS = 0.16
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
     (
-        DROP_OFF_RADIUS * math.cos(0.0),
-        DROP_OFF_RADIUS * math.sin(0.0),
+        START_CENTER[0] + DROP_OFF_RADIUS * math.cos(0.0),
+        START_CENTER[1] + DROP_OFF_RADIUS * math.sin(0.0),
         TABLE_HEIGHT + DROP_OFF_HEIGHT / 2.0,
     ),
     (
-        DROP_OFF_RADIUS * math.cos(2.0 * math.pi / 3.0),
-        DROP_OFF_RADIUS * math.sin(2.0 * math.pi / 3.0),
+        START_CENTER[0] + DROP_OFF_RADIUS * math.cos(2.0 * math.pi / 3.0),
+        START_CENTER[1] + DROP_OFF_RADIUS * math.sin(2.0 * math.pi / 3.0),
         TABLE_HEIGHT + DROP_OFF_HEIGHT / 2.0,
     ),
     (
-        DROP_OFF_RADIUS * math.cos(4.0 * math.pi / 3.0),
-        DROP_OFF_RADIUS * math.sin(4.0 * math.pi / 3.0),
+        START_CENTER[0] + DROP_OFF_RADIUS * math.cos(4.0 * math.pi / 3.0),
+        START_CENTER[1] + DROP_OFF_RADIUS * math.sin(4.0 * math.pi / 3.0),
         TABLE_HEIGHT + DROP_OFF_HEIGHT / 2.0,
     ),
 )
@@ -126,7 +126,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
             collision_props=None,
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(1.0, 0.1, 0.1),
-                opacity=0.35,
+                opacity=0.15,
                 roughness=0.6,
                 metallic=0.0,
             ),
@@ -149,7 +149,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
             collision_props=None,
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.1, 0.2, 1.0),
-                opacity=0.35,
+                opacity=0.15,
                 roughness=0.6,
                 metallic=0.0,
             ),
@@ -172,7 +172,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
             collision_props=None,
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(1.0, 0.9, 0.1),
-                opacity=0.35,
+                opacity=0.15,
                 roughness=0.6,
                 metallic=0.0,
             ),
@@ -195,7 +195,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
             collision_props=None,
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.2, 1.0, 0.2),
-                opacity=0.2,
+                opacity=0.1,
                 roughness=0.6,
                 metallic=0.0,
             ),
