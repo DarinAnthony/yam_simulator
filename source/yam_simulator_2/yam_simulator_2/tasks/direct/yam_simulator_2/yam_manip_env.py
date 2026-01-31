@@ -28,6 +28,11 @@ class YamManipEnv(DirectRLEnv):
         self.robot = Articulation(self.cfg.robot_cfg)
         self.table = RigidObject(self.cfg.table_cfg)
         self.wall = RigidObject(self.cfg.wall_cfg)
+        self.dropoff_red = RigidObject(self.cfg.dropoff_red_cfg)
+        self.dropoff_blue = RigidObject(self.cfg.dropoff_blue_cfg)
+        self.dropoff_yellow = RigidObject(self.cfg.dropoff_yellow_cfg)
+        self.start_area = RigidObject(self.cfg.start_area_cfg)
+        self.start_origin = RigidObject(self.cfg.start_origin_cfg)
         self.red_block = RigidObject(self.cfg.red_block_cfg)
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
@@ -39,6 +44,11 @@ class YamManipEnv(DirectRLEnv):
         self.scene.articulations["robot"] = self.robot
         self.scene.rigid_objects["table"] = self.table
         self.scene.rigid_objects["wall"] = self.wall
+        self.scene.rigid_objects["dropoff_red"] = self.dropoff_red
+        self.scene.rigid_objects["dropoff_blue"] = self.dropoff_blue
+        self.scene.rigid_objects["dropoff_yellow"] = self.dropoff_yellow
+        self.scene.rigid_objects["start_area"] = self.start_area
+        self.scene.rigid_objects["start_origin"] = self.start_origin
         self.scene.rigid_objects["red_block"] = self.red_block
         self.scene.rigid_objects["blue_block"] = self.blue_block
         self.scene.rigid_objects["yellow_block"] = self.yellow_block
@@ -82,9 +92,27 @@ class YamManipEnv(DirectRLEnv):
         joint_vel = self.robot.data.default_joint_vel[env_ids]
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        for block in (self.red_block, self.blue_block, self.yellow_block):
+        num_envs = env_ids.shape[0]
+        start_center = torch.tensor(
+            (self.cfg.start_area_cfg.init_state.pos[0], self.cfg.start_area_cfg.init_state.pos[1]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        radius = self.cfg.start_area_cfg.spawn.radius * 0.95
+        angles = 2.0 * torch.pi * torch.rand((3, num_envs), device=self.device)
+        radii = torch.sqrt(torch.rand((3, num_envs), device=self.device)) * radius
+        xy_offsets = torch.stack((radii * torch.cos(angles), radii * torch.sin(angles)), dim=-1)
+
+        z = (
+            self.cfg.table_cfg.init_state.pos[2]
+            + self.cfg.table_cfg.spawn.size[2] / 2.0
+            + self.cfg.red_block_cfg.spawn.size[2] / 2.0
+        )
+        for idx, block in enumerate((self.red_block, self.blue_block, self.yellow_block)):
             block_state = block.data.default_root_state[env_ids].clone()
-            block_state[:, 0:3] += self.scene.env_origins[env_ids]
+            block_state[:, 0] = start_center[0] + xy_offsets[idx, :, 0] + self.scene.env_origins[env_ids, 0]
+            block_state[:, 1] = start_center[1] + xy_offsets[idx, :, 1] + self.scene.env_origins[env_ids, 1]
+            block_state[:, 2] = z
             block_state[:, 7:] = 0.0
             block.write_root_pose_to_sim(block_state[:, 0:7], env_ids)
             block.write_root_velocity_to_sim(block_state[:, 7:], env_ids)
