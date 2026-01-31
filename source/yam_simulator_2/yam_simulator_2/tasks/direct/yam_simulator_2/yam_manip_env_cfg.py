@@ -9,6 +9,8 @@ import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.controllers import DifferentialIKControllerCfg
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
@@ -36,6 +38,7 @@ START_AREA_RADIUS = 0.08
 START_AREA_HEIGHT = 0.01
 START_CENTER = (0.30, 0.0, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
 BLOCK_CLEARANCE = 0.001
+MIN_BLOCK_SEPARATION = INCH * 1.25
 DROP_OFF_RADIUS = 0.16
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
@@ -63,7 +66,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     # env
     decimation = 2
     episode_length_s = 10.0
-    action_space = 1
+    action_space = 4
     observation_space = 9
     state_space = 0
 
@@ -74,6 +77,25 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=2.0, replicate_physics=True)
     use_start_area_radius: bool = True
     block_clearance: float = BLOCK_CLEARANCE
+    min_block_separation: float = MIN_BLOCK_SEPARATION
+
+    # Actions: [dx, dy, dz, gripper]
+    ee_delta_scale: float = 0.02
+    ee_pos_limit: float = 0.02
+    gripper_open: float = 0.0
+    gripper_closed: float = -0.0475
+
+    robot_entity: SceneEntityCfg = SceneEntityCfg(
+        "robot",
+        joint_names=["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "joint8"],
+        body_names=["link_6"],
+    )
+
+    diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
+        command_type="position",
+        use_relative_mode=False,
+        ik_method="dls",
+    )
 
     # robot(s)
     robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
