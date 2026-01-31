@@ -27,7 +27,10 @@ class YamManipEnv(DirectRLEnv):
 
         self.robot = Articulation(self.cfg.robot_cfg)
         self.table = RigidObject(self.cfg.table_cfg)
-        self.block = RigidObject(self.cfg.block_cfg)
+        self.wall = RigidObject(self.cfg.wall_cfg)
+        self.red_block = RigidObject(self.cfg.red_block_cfg)
+        self.blue_block = RigidObject(self.cfg.blue_block_cfg)
+        self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
@@ -35,7 +38,10 @@ class YamManipEnv(DirectRLEnv):
 
         self.scene.articulations["robot"] = self.robot
         self.scene.rigid_objects["table"] = self.table
-        self.scene.rigid_objects["block"] = self.block
+        self.scene.rigid_objects["wall"] = self.wall
+        self.scene.rigid_objects["red_block"] = self.red_block
+        self.scene.rigid_objects["blue_block"] = self.blue_block
+        self.scene.rigid_objects["yellow_block"] = self.yellow_block
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -48,8 +54,10 @@ class YamManipEnv(DirectRLEnv):
         return
 
     def _get_observations(self) -> dict:
-        block_pos = self.block.data.root_pos_w - self.scene.env_origins
-        observations = {"policy": block_pos}
+        red_pos = self.red_block.data.root_pos_w - self.scene.env_origins
+        blue_pos = self.blue_block.data.root_pos_w - self.scene.env_origins
+        yellow_pos = self.yellow_block.data.root_pos_w - self.scene.env_origins
+        observations = {"policy": torch.cat((red_pos, blue_pos, yellow_pos), dim=-1)}
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
@@ -74,9 +82,10 @@ class YamManipEnv(DirectRLEnv):
         joint_vel = self.robot.data.default_joint_vel[env_ids]
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        block_state = self.block.data.default_root_state[env_ids].clone()
-        block_state[:, 0:3] += self.scene.env_origins[env_ids]
-        block_state[:, 7:] = 0.0
-        self.block.write_root_pose_to_sim(block_state[:, 0:7], env_ids)
-        self.block.write_root_velocity_to_sim(block_state[:, 7:], env_ids)
-        self.block.reset()
+        for block in (self.red_block, self.blue_block, self.yellow_block):
+            block_state = block.data.default_root_state[env_ids].clone()
+            block_state[:, 0:3] += self.scene.env_origins[env_ids]
+            block_state[:, 7:] = 0.0
+            block.write_root_pose_to_sim(block_state[:, 0:7], env_ids)
+            block.write_root_velocity_to_sim(block_state[:, 7:], env_ids)
+            block.reset()
