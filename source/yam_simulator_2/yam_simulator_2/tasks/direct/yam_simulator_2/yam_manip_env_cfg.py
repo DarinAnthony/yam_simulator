@@ -16,7 +16,12 @@ from isaaclab.sim.spawners.shapes import CuboidCfg
 from isaaclab.utils import configclass
 
 ASSET_DIR = Path(__file__).resolve().parents[4] / "assets"
-YAM_USD_PATH = ASSET_DIR / "yam" / "yam" / "yam.usd"
+YAM_USD_PATH = (
+    ASSET_DIR
+    / "yam_new"
+    / "yam_st_urdf_with_linear_gripper"
+    / "yam_st_urdf_with_linear_gripper.usd"
+)
 
 INCH = 0.0254
 TABLE_HEIGHT = 0.75
