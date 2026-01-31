@@ -190,7 +190,17 @@ class YamManipEnv(DirectRLEnv):
         if self._entities_resolved:
             return
         self.cfg.robot_entity.resolve(self.scene)
-        self.arm_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[:6], device=self.device, dtype=torch.long)
-        self.grip_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[6:8], device=self.device, dtype=torch.long)
+        joint_ids = self.cfg.robot_entity.joint_ids
+        if isinstance(joint_ids, slice):
+            joint_ids = list(range(self.robot.num_joints))[joint_ids]
+        joint_ids = list(joint_ids)
+        if len(joint_ids) >= 8:
+            arm_ids = joint_ids[:6]
+            grip_ids = joint_ids[6:8]
+        else:
+            arm_ids = joint_ids[:-2]
+            grip_ids = joint_ids[-2:]
+        self.arm_joint_ids = torch.tensor(arm_ids, device=self.device, dtype=torch.long)
+        self.grip_joint_ids = torch.tensor(grip_ids, device=self.device, dtype=torch.long)
         self.ee_body_id = self.cfg.robot_entity.body_ids[0]
         self._entities_resolved = True
