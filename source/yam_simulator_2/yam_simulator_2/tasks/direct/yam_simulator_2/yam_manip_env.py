@@ -26,6 +26,7 @@ class YamManipEnv(DirectRLEnv):
         self._ik = DifferentialIKController(self.cfg.diff_ik_cfg, num_envs=self.num_envs, device=self.device)
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
+        self._entities_resolved = False
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -60,15 +61,13 @@ class YamManipEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        self.cfg.robot_entity.resolve(self.scene)
-        self.arm_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[:6], device=self.device, dtype=torch.long)
-        self.grip_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[6:8], device=self.device, dtype=torch.long)
-        self.ee_body_id = self.cfg.robot_entity.body_ids[0]
+        # Defer entity resolution until the simulation initializes (e.g., in reset).
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.actions = actions.clone()
 
     def _apply_action(self) -> None:
+        self._resolve_robot_entities()
         delta_pos = torch.clamp(self.actions[:, 0:3], -1.0, 1.0)
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
@@ -121,6 +120,8 @@ class YamManipEnv(DirectRLEnv):
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
         super()._reset_idx(env_ids)
+
+        self._resolve_robot_entities()
 
         default_root_state = self.robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
@@ -184,3 +185,12 @@ class YamManipEnv(DirectRLEnv):
         )
         self.ee_pos_target_b[env_ids] = ee_pos_b[env_ids]
         self.ee_quat_target_b[env_ids] = ee_quat_b[env_ids]
+
+    def _resolve_robot_entities(self) -> None:
+        if self._entities_resolved:
+            return
+        self.cfg.robot_entity.resolve(self.scene)
+        self.arm_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[:6], device=self.device, dtype=torch.long)
+        self.grip_joint_ids = torch.tensor(self.cfg.robot_entity.joint_ids[6:8], device=self.device, dtype=torch.long)
+        self.ee_body_id = self.cfg.robot_entity.body_ids[0]
+        self._entities_resolved = True
