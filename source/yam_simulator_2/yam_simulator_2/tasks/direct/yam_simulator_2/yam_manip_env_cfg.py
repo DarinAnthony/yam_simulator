@@ -88,7 +88,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     robot_entity: SceneEntityCfg = SceneEntityCfg(
         "robot",
         joint_names=["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "joint8"],
-        body_names=["link_6"],
+        body_names=["gripper"],
     )
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
