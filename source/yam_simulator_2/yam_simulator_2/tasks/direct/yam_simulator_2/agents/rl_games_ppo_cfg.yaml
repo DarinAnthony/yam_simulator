@@ -77,8 +77,8 @@ params:
     critic_coef: 2.0
     bounds_loss_coef: 0.0001
 
-    horizon_length: 32            # 8192 * 32 = 262,144 batch
-    minibatch_size: 32768         # 8 minibatches/update
+    horizon_length: 64            # 8192 * 32 = 262,144 batch # maybe try 32 for memory?
+    minibatch_size: 65536         # 8 minibatches/update # maybe try 32768 for memory?
     mini_epochs: 5                # 40 optimizer steps/update
 
     # If you are NOT using an RNN, keep seq_length at 1 (or omit it)

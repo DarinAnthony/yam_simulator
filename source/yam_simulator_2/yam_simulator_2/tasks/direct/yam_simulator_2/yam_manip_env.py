@@ -222,6 +222,7 @@ class YamManipEnv(DirectRLEnv):
         ee_pos_w = ee_pose_w[:, 0:3]
         ee_quat_w = ee_pose_w[:, 3:7]
         offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
+        offset = offset.unsqueeze(0).expand(ee_quat_w.shape[0], 3)
         offset_w = torch_utils.quat_apply(ee_quat_w, offset)
         marker_pos = ee_pos_w + offset_w
         marker_quat = ee_quat_w
