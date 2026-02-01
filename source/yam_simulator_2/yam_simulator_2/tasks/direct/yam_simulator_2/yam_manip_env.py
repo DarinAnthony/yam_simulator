@@ -159,10 +159,10 @@ class YamManipEnv(DirectRLEnv):
         self.red_block = RigidObject(self.cfg.red_block_cfg)
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
-        self.camera = Camera(self.cfg.camera_cfg)
-        # Some Isaac Lab builds expect sensors to carry their own timestamp.
-        if not hasattr(self.camera, "_timestamp"):
-            self.camera._timestamp = 0.0
+        self.camera = Camera(self.cfg.camera_cfg) if getattr(self.cfg, "use_camera", False) else None
+        if self.camera is not None:
+            if not hasattr(self.camera, "_timestamp"):
+                self.camera._timestamp = 0.0
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
@@ -179,7 +179,8 @@ class YamManipEnv(DirectRLEnv):
         self.scene.rigid_objects["red_block"] = self.red_block
         self.scene.rigid_objects["blue_block"] = self.blue_block
         self.scene.rigid_objects["yellow_block"] = self.yellow_block
-        self.scene.sensors["camera"] = self.camera
+        if self.camera is not None:
+            self.scene.sensors["camera"] = self.camera
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -638,7 +639,8 @@ class YamManipEnv(DirectRLEnv):
         self.ee_quat_nominal_b[env_ids] = ee_quat_b[env_ids]
         self._ik.reset()
         self._update_site_marker(env_ids=env_ids)
-        self._update_camera_pose(env_ids=env_ids)
+        if self.camera is not None:
+            self._update_camera_pose(env_ids=env_ids)
         # Initialize EE velocity buffer from current state (if available).
         ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
         if ee_state.shape[-1] >= 13:
@@ -790,6 +792,8 @@ class YamManipEnv(DirectRLEnv):
         self.site_marker.write_root_velocity_to_sim(marker_state[:, 7:], env_ids)
 
     def _update_camera_pose(self, env_ids=None) -> None:
+        if self.camera is None:
+            return
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
         # midpoint of tips

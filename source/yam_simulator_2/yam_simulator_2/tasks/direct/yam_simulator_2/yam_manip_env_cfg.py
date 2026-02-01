@@ -147,6 +147,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     debug_nan_max_print: int = 10
     debug_abs_max: float = 1.0e3
     debug_print_obs: bool = False
+    use_camera: bool = False
     camera_offset_pos: tuple[float, float, float] = (0.0, 0.02540, 0.11176)
     camera_pitch_deg: float = -60.0
 
