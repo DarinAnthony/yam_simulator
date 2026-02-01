@@ -184,6 +184,11 @@ class YamManipEnv(DirectRLEnv):
             block.write_root_velocity_to_sim(block_state[:, 7:], env_ids)
             block.reset()
 
+        self.actions[env_ids] = 0.0
+        self.scene.write_data_to_sim()
+        self.sim.step(render=False)
+        self.scene.update(dt=self.physics_dt)
+
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
