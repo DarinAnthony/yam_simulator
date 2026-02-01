@@ -26,7 +26,7 @@ TABLE_SIZE = (0.60706, 1.51892, 0.05)
 # Robot base placement: 35.5 in (0.90170 m) from the left edge when facing -Y.
 # Left edge (facing -Y) lies at Y = +TABLE_SIZE[1]/2 = +0.75946 m.
 # Base Y = 0.75946 - 0.90170 = -0.14224 m
-ROBOT_BASE_X = -1.5353
+ROBOT_BASE_X = -0.26543
 ROBOT_BASE_Y = 0.14224
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
