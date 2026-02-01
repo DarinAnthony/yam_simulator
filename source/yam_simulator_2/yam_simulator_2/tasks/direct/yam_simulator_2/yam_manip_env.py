@@ -99,7 +99,8 @@ class YamManipEnv(DirectRLEnv):
         arm_q_des = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
         self.robot.set_joint_position_target(arm_q_des, joint_ids=self.arm_joint_ids)
 
-        t = (grip_cmd + 1.0) * 0.5
+        # Treat non-positive commands as "keep open" so default 0.0 stays open.
+        t = torch.clamp(grip_cmd, 0.0, 1.0)
         open_q = float(self.cfg.gripper_open)
         closed_q = float(self.cfg.gripper_closed)
         finger_q = open_q + t * (closed_q - open_q)
