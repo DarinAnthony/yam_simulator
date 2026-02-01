@@ -67,7 +67,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     # env
     decimation = 2
     episode_length_s = 60.0
-    action_space = 4
+    action_space = 6
     observation_space = 40
     state_space = 0
 
@@ -83,6 +83,9 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     # Actions: [dx, dy, dz, gripper]
     ee_delta_scale: float = 0.005
     ee_pos_limit: float = 0.005
+    tilt_scale: float = 0.15
+    yaw_rate_limit: float = 0.25
+    yaw_update_eps: float = 1e-3
     gripper_open: float = -0.0475
     gripper_closed: float = 0.0
     home_joint_pos: list[float] = [
@@ -121,9 +124,10 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     debug_print_joint_pos: bool = True
     debug_nan_checks: bool = True
     debug_nan_max_print: int = 10
+    debug_abs_max: float = 1.0e3
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
-        command_type="position",
+        command_type="pose",
         use_relative_mode=False,
         ik_method="dls",
     )
