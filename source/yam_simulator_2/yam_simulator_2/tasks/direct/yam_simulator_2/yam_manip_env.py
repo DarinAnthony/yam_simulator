@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
@@ -17,6 +16,101 @@ from isaaclab.utils.math import subtract_frame_transforms
 import isaacsim.core.utils.torch as torch_utils
 
 from .yam_manip_env_cfg import YamManipEnvCfg
+
+
+@torch.jit.script
+def compute_policy_obs(
+    phase: torch.Tensor,
+    sorted_mask: torch.Tensor,
+    ee_pos_b: torch.Tensor,
+    ee_pos_target_b: torch.Tensor,
+    grip_t: torch.Tensor,
+    red_pos: torch.Tensor,
+    blue_pos: torch.Tensor,
+    yellow_pos: torch.Tensor,
+    red_vel: torch.Tensor,
+    blue_vel: torch.Tensor,
+    yellow_vel: torch.Tensor,
+    drop_r: torch.Tensor,
+    drop_b: torch.Tensor,
+    drop_y: torch.Tensor,
+) -> torch.Tensor:
+    # type: (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor) -> torch.Tensor
+    phase_clamped = torch.clamp(phase, 0, 2).to(torch.long)
+    phase_oh = torch.zeros((phase.shape[0], 3), device=phase.device, dtype=torch.float32)
+    phase_oh.scatter_(1, phase_clamped.unsqueeze(1), 1.0)
+    sorted_f = sorted_mask.to(torch.float32)
+    obs = torch.cat(
+        [
+            phase_oh,
+            sorted_f,
+            ee_pos_b,
+            ee_pos_target_b,
+            grip_t,
+            red_pos,
+            blue_pos,
+            yellow_pos,
+            red_vel,
+            blue_vel,
+            yellow_vel,
+            drop_r,
+            drop_b,
+            drop_y,
+        ],
+        dim=-1,
+    )
+    return obs
+
+
+@torch.jit.script
+def compute_reward_core(
+    phase: torch.Tensor,
+    actions_xyz: torch.Tensor,
+    tgt_block_pos: torch.Tensor,
+    tgt_goal_pos: torch.Tensor,
+    grasp_pos: torch.Tensor,
+    table_top_z: float,
+    block_half_z: float,
+    grip_t: torch.Tensor,
+    grip_closed_thresh: float,
+    grip_open_thresh: float,
+    near_thresh: float,
+    lift_height: float,
+    goal_xy_thresh: float,
+    place_z_thresh: float,
+    reach_k: float,
+    goal_k: float,
+    reach_w: float,
+    grasp_w: float,
+    lift_w: float,
+    carry_w: float,
+    step_penalty_w: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # type: (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, float, torch.Tensor, float, float, float, float, float, float, float, float, float, float, float, float, float, float) -> Tuple[torch.Tensor, torch.Tensor]
+    active = phase < 3
+    d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
+    d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
+
+    grip_closed = grip_t > grip_closed_thresh
+    grip_open = grip_t < grip_open_thresh
+
+    near = d_reach < near_thresh
+    lifted = (tgt_block_pos[:, 2] - table_top_z) > lift_height
+    at_goal_xy = d_goal_xy < goal_xy_thresh
+    near_table = torch.abs(tgt_block_pos[:, 2] - (table_top_z + block_half_z)) < place_z_thresh
+
+    grasped = (near & grip_closed) | lifted
+
+    r_reach = (1.0 - torch.tanh(reach_k * d_reach)) * (~grasped) * active
+    r_grasp = (near.to(torch.float32) * grip_t) * (~lifted) * active
+    r_lift = torch.clamp((tgt_block_pos[:, 2] - table_top_z) / lift_height, 0.0, 1.0) * grasped * active
+    r_carry = (1.0 - torch.tanh(goal_k * d_goal_xy)) * grasped * active
+
+    placed = at_goal_xy & near_table & grip_open & active
+
+    act_pen = step_penalty_w * torch.sum(actions_xyz * actions_xyz, dim=-1)
+    reward = reach_w * r_reach + grasp_w * r_grasp + lift_w * r_lift + carry_w * r_carry - act_pen
+    return reward, placed
 
 
 class YamManipEnv(DirectRLEnv):
@@ -32,6 +126,8 @@ class YamManipEnv(DirectRLEnv):
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
         self._debug_printed = False
+        self._debug_bad_obs = False
+        self._debug_bad_rew = False
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -133,41 +229,29 @@ class YamManipEnv(DirectRLEnv):
         drop_b = self.dropoff_blue.data.root_pos_w - self.scene.env_origins
         drop_y = self.dropoff_yellow.data.root_pos_w - self.scene.env_origins
 
-        phase_clamped = torch.clamp(self.phase, 0, 2)
-        phase_oh = F.one_hot(phase_clamped, num_classes=3).float()
-        sorted_f = self.sorted_mask.float()
-
-        obs = torch.cat(
-            [
-                phase_oh,
-                sorted_f,
-                ee_pos_b,
-                self.ee_pos_target_b,
-                grip_t,
-                red_pos,
-                blue_pos,
-                yellow_pos,
-                red_vel,
-                blue_vel,
-                yellow_vel,
-                drop_r,
-                drop_b,
-                drop_y,
-            ],
-            dim=-1,
+        obs = compute_policy_obs(
+            self.phase,
+            self.sorted_mask,
+            ee_pos_b,
+            self.ee_pos_target_b,
+            grip_t,
+            red_pos,
+            blue_pos,
+            yellow_pos,
+            red_vel,
+            blue_vel,
+            yellow_vel,
+            drop_r,
+            drop_b,
+            drop_y,
         )
+        self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
         self._resolve_robot_entities()
 
-        table_top_z = (
-            self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
-        )
-        block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0
-
         phase = self.phase
-        active = phase < 3
         tgt_idx = torch.clamp(phase, 0, 2)
 
         block_pos = torch.stack(
@@ -194,30 +278,34 @@ class YamManipEnv(DirectRLEnv):
         grasp_pos_w, _ = self._ee_grasp_pos_w()
         grasp_pos = grasp_pos_w - self.scene.env_origins
 
-        d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
-        d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
-
         grip_t = self._grip_close_t()
-        grip_closed = grip_t > float(self.cfg.grip_closed_thresh)
-        grip_open = grip_t < float(self.cfg.grip_open_thresh)
+        table_top_z = self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
+        block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0
 
-        near = d_reach < float(self.cfg.near_thresh)
-        lifted = (tgt_block_pos[:, 2] - table_top_z) > float(self.cfg.lift_height)
-        at_goal_xy = d_goal_xy < float(self.cfg.goal_xy_thresh)
-        near_table = torch.abs(tgt_block_pos[:, 2] - (table_top_z + block_half_z)) < float(
-            self.cfg.place_z_thresh
+        base_reward, placed = compute_reward_core(
+            phase=phase,
+            actions_xyz=self.actions[:, 0:3],
+            tgt_block_pos=tgt_block_pos,
+            tgt_goal_pos=tgt_goal_pos,
+            grasp_pos=grasp_pos,
+            table_top_z=float(table_top_z),
+            block_half_z=float(block_half_z),
+            grip_t=grip_t,
+            grip_closed_thresh=float(self.cfg.grip_closed_thresh),
+            grip_open_thresh=float(self.cfg.grip_open_thresh),
+            near_thresh=float(self.cfg.near_thresh),
+            lift_height=float(self.cfg.lift_height),
+            goal_xy_thresh=float(self.cfg.goal_xy_thresh),
+            place_z_thresh=float(self.cfg.place_z_thresh),
+            reach_k=float(self.cfg.reach_k),
+            goal_k=float(self.cfg.goal_k),
+            reach_w=float(self.cfg.reach_w),
+            grasp_w=float(self.cfg.grasp_w),
+            lift_w=float(self.cfg.lift_w),
+            carry_w=float(self.cfg.carry_w),
+            step_penalty_w=float(self.cfg.step_penalty_w),
         )
-
-        grasped = (near & grip_closed) | lifted
-
-        r_reach = (1.0 - torch.tanh(float(self.cfg.reach_k) * d_reach)) * (~grasped) * active
-        r_grasp = (near.float() * grip_t) * (~lifted) * active
-        r_lift = torch.clamp(
-            (tgt_block_pos[:, 2] - table_top_z) / float(self.cfg.lift_height), 0.0, 1.0
-        ) * grasped * active
-        r_carry = (1.0 - torch.tanh(float(self.cfg.goal_k) * d_goal_xy)) * grasped * active
-
-        placed = at_goal_xy & near_table & grip_open & active
+        self._debug_check_tensor("reward_base", base_reward, "_debug_bad_rew")
 
         bonus = torch.zeros((self.num_envs,), device=self.device)
         newly_placed = placed.nonzero(as_tuple=False).squeeze(-1)
@@ -227,17 +315,7 @@ class YamManipEnv(DirectRLEnv):
             self.phase[newly_placed] += 1
             bonus[newly_placed] = float(self.cfg.place_bonus)
 
-        act_pen = float(self.cfg.step_penalty_w) * torch.sum(self.actions[:, 0:3] ** 2, dim=-1)
-
-        reward = (
-            float(self.cfg.reach_w) * r_reach
-            + float(self.cfg.grasp_w) * r_grasp
-            + float(self.cfg.lift_w) * r_lift
-            + float(self.cfg.carry_w) * r_carry
-            + bonus
-            - act_pen
-        )
-        return reward
+        return base_reward + bonus
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._resolve_robot_entities()
@@ -355,6 +433,14 @@ class YamManipEnv(DirectRLEnv):
         robot_name = getattr(self.robot, "prim_path", "robot")
         print(f"[DEBUG] {robot_name} joint positions:", dict(zip(joint_names, joint_pos)))
         self._debug_printed = True
+
+    def _debug_check_tensor(self, name: str, tensor: torch.Tensor, flag_attr: str) -> None:
+        if getattr(self, flag_attr):
+            return
+        if not torch.isfinite(tensor).all():
+            bad = torch.where(~torch.isfinite(tensor))
+            print(f"[DEBUG] non-finite {name} at indices:", bad)
+            setattr(self, flag_attr, True)
 
     def _set_robot_home(self, env_ids) -> None:
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
