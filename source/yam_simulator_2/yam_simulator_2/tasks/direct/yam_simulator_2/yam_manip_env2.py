@@ -420,6 +420,7 @@ class YamManipEnv(DirectRLEnv):
         d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
         open_mask = d_reach > float(self.cfg.near_thresh)
         r_open = float(self.cfg.open_until_contact_w) * torch.clamp(1.0 - grip_t, 0.0, 1.0) * open_mask
+
         reward = reward + r_smooth + r_open
 
         # --- Waypoint / smooth pick-place shaping ---
@@ -489,7 +490,7 @@ class YamManipEnv(DirectRLEnv):
         # Penalty for any arm link dipping below table height (approximate contact).
         arm_z = self.robot.data.body_state_w[:, :, 2] - self.scene.env_origins[:, 2].unsqueeze(1)
         min_arm_z = arm_z.min(dim=1).values
-        table_top = table_top_z  # already in world frame
+        table_top = table_top_z
         contact_depth = torch.clamp(table_top - float(self.cfg.table_clearance) - min_arm_z, min=0.0)
         r_table_contact = -float(self.cfg.table_contact_w) * contact_depth
         reward = reward + r_table_contact
@@ -602,7 +603,6 @@ class YamManipEnv(DirectRLEnv):
         self.ee_quat_nominal_b[env_ids] = ee_quat_b[env_ids]
         self._ik.reset()
         self._update_site_marker(env_ids=env_ids)
-        # Initialize EE velocity buffer from current state (if available).
         ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
         if ee_state.shape[-1] >= 13:
             self.prev_ee_lin_vel[env_ids] = ee_state[env_ids, 7:10]
