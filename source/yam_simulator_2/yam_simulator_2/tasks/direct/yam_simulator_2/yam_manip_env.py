@@ -224,8 +224,9 @@ class YamManipEnv(DirectRLEnv):
 
         # Make the target relative to the current EE pose to avoid drift to clamp corners.
         self.ee_pos_target_b = ee_pos_b + delta_pos
-        ee_min = torch.tensor([-0.25, -0.25, -0.10], device=self.device)
-        ee_max = torch.tensor([0.45, 0.25, 0.35], device=self.device)
+        ee_min = torch.tensor([-0.25, -0.35, -0.10], device=self.device)
+        ee_max = torch.tensor([ 0.45,  0.45,  0.35], device=self.device)
+
         self.ee_pos_target_b = torch.clamp(self.ee_pos_target_b, ee_min, ee_max)
 
         # Orientation target: apply small roll/pitch deltas; yaw held by target
@@ -446,7 +447,9 @@ class YamManipEnv(DirectRLEnv):
         # - open when not aligned
         # - closed when aligned AND near pick height
         grip_target = (g_align * g_zpick)  # in [0,1]
-        r_grip = 1.0 - (grip_t - grip_target) ** 2  # in [0,1], max when matching target
+        # zero-mean penalty, only active near pick neighborhood
+        r_grip = - (grip_t - grip_target) ** 2
+        r_grip = r_grip * (g_align * g_zpick).detach()
 
         # -------------------------
         # Stage 4: Lift / Carry / Place
@@ -469,6 +472,14 @@ class YamManipEnv(DirectRLEnv):
 
         near_goal = d_goal_xy < (2.0 * float(self.cfg.goal_xy_thresh))
         r_place = (0.5 * r_carry + 0.5 * r_place_z) * near_goal.to(torch.float32)
+        # Gate lift/carry/place by a crude "held" predicate to avoid rewards from jostling only.
+        d_ee_block = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
+        close_enough = d_ee_block < 0.04
+        held = (grip_t > float(self.cfg.grip_closed_thresh)) & close_enough & (block_clear > 0.01)
+        held_f = held.to(torch.float32)
+        r_lift = r_lift * held_f
+        r_carry = r_carry * held_f
+        r_place = r_place * held_f
 
         # Placement success + phase advance (keep your logic)
         grip_open = grip_t < float(self.cfg.grip_open_thresh)
