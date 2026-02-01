@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import math
 import torch
 
 import isaaclab.sim as sim_utils
@@ -300,8 +299,8 @@ class YamManipEnv(DirectRLEnv):
         tgt_block_pos = block_pos[env_ids, tgt_idx]
         tgt_goal_pos = goal_pos[env_ids, tgt_idx]
 
-        # EE grasp point (the one you already use)
-        grasp_pos_w, _ = self._ee_grasp_pos_w()
+        # EE grasp point at fingertip pinch
+        grasp_pos_w, _ = self._pinch_pos_w()
         grasp_pos = grasp_pos_w - self.scene.env_origins
 
         grip_t = self._grip_close_t()  # 0=open, 1=closed (from joint positions)
@@ -358,39 +357,43 @@ class YamManipEnv(DirectRLEnv):
         # -------------------------
         # Stage 3: Gripper timing shaping
         # -------------------------
-        # Reward closing near pick, penalize closing when far.
+        # Reward closing near pick; small penalty for closing when far.
         near_pick = (g_align * g_zpick).detach()          # [0,1]
-        r_grip = near_pick * grip_t - (1.0 - g_align.detach()) * grip_t
+        r_grip = near_pick * grip_t
+        r_grip = r_grip - 0.05 * (1.0 - g_align.detach()) * grip_t
 
         # -------------------------
         # Stage 4: Lift / Carry / Place
         # -------------------------
         # "Lifted" proxy based on block height above rest position on the table.
         block_clear = (tgt_block_pos[:, 2] - block_rest_center_z)
-        lifted = block_clear > (0.5 * float(self.cfg.lift_height))  # easier than full lift_height early
-
-        # Lift reward (bounded [0,1])
-        r_lift = torch.clamp(block_clear / float(self.cfg.lift_height), 0.0, 1.0) * lifted.to(torch.float32)
+        lift_h = float(self.cfg.lift_height)
+        # Continuous lift shaping (not all-or-nothing).
+        r_lift = torch.clamp(block_clear / lift_h, 0.0, 1.0)
 
         # Carry toward goal (bounded)
         d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
         k_goal = 10.0
-        r_carry = torch.exp(-k_goal * d_goal_xy) * lifted.to(torch.float32)
+        r_carry = torch.exp(-k_goal * d_goal_xy)
 
         # Place shaping: encourage lowering near goal
         place_z = block_rest_center_z + float(self.cfg.place_z_offset)
-        r_place_z = torch.exp(-k_z * torch.abs(tgt_block_pos[:, 2] - place_z)) * lifted.to(torch.float32)
+        r_place_z = torch.exp(-k_z * torch.abs(tgt_block_pos[:, 2] - place_z))
 
         near_goal = d_goal_xy < (2.0 * float(self.cfg.goal_xy_thresh))
         r_place = (0.5 * r_carry + 0.5 * r_place_z) * near_goal.to(torch.float32)
         # Gate lift/carry/place by a "held" predicate (closed + near block).
+        block_size = torch.tensor(self.cfg.red_block_cfg.spawn.size, device=self.device)
+        block_radius = 0.5 * torch.linalg.norm(block_size)
         d_ee_block = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
-        close_enough = d_ee_block < 0.035
+        close_enough = d_ee_block < (block_radius + 0.02)
         held = (grip_t > float(self.cfg.grip_closed_thresh)) & close_enough
         held_f = held.to(torch.float32)
         r_lift = r_lift * held_f
-        r_carry = r_carry * held_f
-        r_place = r_place * held_f
+        # Use a small lifted threshold only for carry/place gating.
+        lifted = block_clear > 0.02
+        r_carry = r_carry * lifted.to(torch.float32) * held_f
+        r_place = r_place * lifted.to(torch.float32) * held_f
 
         # Reward upward progress of the grasp point while "held".
         dz = grasp_pos[:, 2] - self.prev_grasp_z
@@ -582,7 +585,7 @@ class YamManipEnv(DirectRLEnv):
         )
         env_ids_all = torch.arange(self.num_envs, device=self.device)
         tgt_block_pos = block_pos[env_ids_all, tgt_idx]
-        grasp_pos_w, _ = self._ee_grasp_pos_w()
+        grasp_pos_w, _ = self._pinch_pos_w()
         grasp_pos = grasp_pos_w - self.scene.env_origins
         xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
         self.prev_wp_dist[env_ids] = xy_block[env_ids].detach()
@@ -660,6 +663,12 @@ class YamManipEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+
+    def _pinch_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # Midpoint of finger tips as pinch point; orientation from gripper body.
+        tip_pos_w = self.robot.data.body_state_w[:, self.marker_body_ids[:2], 0:3].mean(dim=1)
+        tip_quat_w = self.robot.data.body_state_w[:, self.marker_body_ids[0], 3:7]
+        return tip_pos_w, tip_quat_w
 
     def _ee_grasp_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]

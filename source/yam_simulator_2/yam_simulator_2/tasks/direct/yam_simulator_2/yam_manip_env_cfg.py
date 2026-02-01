@@ -102,8 +102,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     lift_w: float = 2.0
     carry_w: float = 2.0
     place_bonus: float = 10.0
-    step_penalty_w: float = 0.01
-    smooth_w: float = 0.02
+    step_penalty_w: float = 0.0
+    smooth_w: float = 0.0
     open_until_contact_w: float = 0.2
     # Waypoint and smoothness shaping
     hover_height: float = 0.08
@@ -116,7 +116,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     wp_place_w: float = 0.3
     wp_progress_w: float = 0.5
     tilt_smooth_w: float = 0.005
-    ee_vel_w: float = 0.004
+    ee_vel_w: float = 0.0
     ee_acc_w: float = 0.0004
     clearance_w: float = 0.2
     clearance_z: float = 0.04
