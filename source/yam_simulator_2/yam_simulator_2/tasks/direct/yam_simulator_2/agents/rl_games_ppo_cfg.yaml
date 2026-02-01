@@ -2,7 +2,7 @@ params:
   seed: 42
 
   env:
-    clip_observations: 10.0
+    clip_observations: 5.0
     clip_actions: 1.0
 
   algo:
@@ -13,7 +13,7 @@ params:
 
   network:
     name: actor_critic
-    separate: True
+    separate: False
     space:
       continuous:
         mu_activation: None
@@ -22,8 +22,8 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: -1.5          # tighter initial exploration than dexterous-hand
-        fixed_sigma: False   # learn sigma
+          val: 0.0          # tighter initial exploration than dexterous-hand
+        fixed_sigma: True   # learn sigma
     mlp:
       units: [256, 256]
       activation: elu
@@ -44,7 +44,7 @@ params:
     multi_gpu: False
 
     ppo: True
-    mixed_precision: False        # disable AMP to avoid NaN std during policy sampling
+    mixed_precision: True        # disable AMP to avoid NaN std during policy sampling
     normalize_input: True
     normalize_value: True
     normalize_advantage: True
@@ -53,12 +53,12 @@ params:
     num_actors: -1                # set by script from num_envs
 
     reward_shaper:
-      scale_value: 1.0            # start here; reduce only if rewards are huge
+      scale_value: 0.01            # start here; reduce only if rewards are huge
 
     gamma: 0.99
     tau: 0.95
 
-    learning_rate: 3e-4
+    learning_rate: 1e-4
     lr_schedule: adaptive
     schedule_type: standard
     kl_threshold: 0.01
@@ -77,8 +77,8 @@ params:
     critic_coef: 2.0
     bounds_loss_coef: 0.0001
 
-    horizon_length: 64            # 8192 * 32 = 262,144 batch # maybe try 32 for memory?
-    minibatch_size: 65536         # 8 minibatches/update # maybe try 32768 for memory?
+    horizon_length: 32            # 8192 * 32 = 262,144 batch # maybe try 32 for memory?
+    minibatch_size: 32768         # 8 minibatches/update # maybe try 32768 for memory?
     mini_epochs: 5                # 40 optimizer steps/update
 
     # If you are NOT using an RNN, keep seq_length at 1 (or omit it)
