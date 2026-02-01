@@ -126,6 +126,7 @@ class YamManipEnv(DirectRLEnv):
         self._entities_resolved = False
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
+        self.prev_actions = torch.zeros_like(self.actions)
         self._debug_printed = False
         self._debug_bad_obs = False
         self._debug_bad_rew = False
@@ -193,6 +194,7 @@ class YamManipEnv(DirectRLEnv):
             e = int(bad_env[0].item())
             print(f"[BAD ACT] env={e} actions[e]={actions[e].detach().cpu().tolist()}")
             raise RuntimeError("Non-finite action input from policy")
+        self.prev_actions = self.actions.clone()
         self.actions = actions.clone()
 
     def _apply_action(self) -> None:
@@ -407,6 +409,17 @@ class YamManipEnv(DirectRLEnv):
             bonus[newly_placed] = float(self.cfg.place_bonus)
 
         reward = base_reward + bonus
+        # Action smoothness penalty (encourage small deltas between steps).
+        actions_xyz = self.actions[:, 0:3]
+        prev_xyz = self.prev_actions[:, 0:3]
+        r_smooth = -float(self.cfg.smooth_w) * torch.sum((actions_xyz - prev_xyz) ** 2, dim=-1)
+
+        # Encourage keeping gripper open until close to the target block.
+        d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
+        open_mask = d_reach > float(self.cfg.near_thresh)
+        r_open = float(self.cfg.open_until_contact_w) * torch.clamp(1.0 - grip_t, 0.0, 1.0) * open_mask
+
+        reward = reward + r_smooth + r_open
         if not torch.isfinite(reward).all():
             bad_env = (~torch.isfinite(reward)).nonzero(as_tuple=False).squeeze(-1)
             e = int(bad_env[0].item())
@@ -418,10 +431,23 @@ class YamManipEnv(DirectRLEnv):
         self._resolve_robot_entities()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         success = self.phase >= 3
+        # Terminate if any block falls below the table.
+        block_pos = torch.stack(
+            [
+                self.red_block.data.root_pos_w - self.scene.env_origins,
+                self.blue_block.data.root_pos_w - self.scene.env_origins,
+                self.yellow_block.data.root_pos_w - self.scene.env_origins,
+            ],
+            dim=1,
+        )
+        min_z = block_pos[:, :, 2].min(dim=1).values
+        table_top = self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
+        fallen = min_z < (table_top - float(self.cfg.fall_termination_margin))
         if torch.any(success):
             success_ids = success.nonzero(as_tuple=False).squeeze(-1)
             self._set_robot_home(success_ids)
-        return success, time_out
+        terminated = success | fallen
+        return terminated, time_out
 
     def _reset_idx(self, env_ids):
         if env_ids is None:
@@ -432,6 +458,7 @@ class YamManipEnv(DirectRLEnv):
         self._ensure_pose_buffers()
         self.phase[env_ids] = 0
         self.sorted_mask[env_ids] = False
+        self.prev_actions[env_ids] = 0.0
 
         default_root_state = self.robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :3] += self.scene.env_origins[env_ids]

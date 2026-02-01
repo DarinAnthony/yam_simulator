@@ -107,6 +107,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     carry_w: float = 2.0
     place_bonus: float = 10.0
     step_penalty_w: float = 0.01
+    smooth_w: float = 0.01
+    open_until_contact_w: float = 0.2
 
     near_thresh: float = 0.03
     grip_closed_thresh: float = 0.8
@@ -114,6 +116,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     lift_height: float = 0.05
     goal_xy_thresh: float = 0.05
     place_z_thresh: float = 0.02
+    fall_termination_margin: float = 0.02
 
     robot_entity: SceneEntityCfg = SceneEntityCfg(
         "robot",
