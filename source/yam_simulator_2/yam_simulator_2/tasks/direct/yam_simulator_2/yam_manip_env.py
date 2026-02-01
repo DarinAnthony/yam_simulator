@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import torch
 
 import isaaclab.sim as sim_utils
@@ -73,6 +74,7 @@ class YamManipEnv(DirectRLEnv):
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
         self.ee_quat_nominal_b = torch.zeros((self.num_envs, 4), device=self.device)
+        self.prev_grasp_z = torch.zeros((self.num_envs,), device=self.device)
         self._entities_resolved = False
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
@@ -147,8 +149,9 @@ class YamManipEnv(DirectRLEnv):
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
         tilt_cmd = torch.clamp(self.actions[:, 3:5], -1.0, 1.0)
-        # Binary gripper command: 1 = fully open, 0 = fully closed.
-        grip_cmd = torch.clamp(self.actions[:, 5], 0.0, 1.0)
+        # Map tanh-style [-1, 1] gripper action to [0, 1] then threshold to open/close.
+        grip_raw = torch.clamp(self.actions[:, 5], -1.0, 1.0)
+        grip_cmd01 = 0.5 * (grip_raw + 1.0)  # -1->0 (closed), 0->0.5 (neutral/open), +1->1 (open)
 
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
@@ -192,7 +195,7 @@ class YamManipEnv(DirectRLEnv):
 
         open_q = float(self.cfg.gripper_open)
         closed_q = float(self.cfg.gripper_closed)
-        is_open = grip_cmd >= 0.5
+        is_open = grip_cmd01 >= 0.5
         finger_q = torch.where(is_open, open_q, closed_q)
         grip_q_des = torch.stack([finger_q, finger_q], dim=1)
         self.robot.set_joint_position_target(grip_q_des, joint_ids=self.grip_joint_ids)
@@ -355,13 +358,9 @@ class YamManipEnv(DirectRLEnv):
         # -------------------------
         # Stage 3: Gripper timing shaping
         # -------------------------
-        # Desired gripper state:
-        # - open when not aligned
-        # - closed when aligned AND near pick height
-        grip_target = (g_align * g_zpick)  # in [0,1]
-        # zero-mean penalty, only active near pick neighborhood
-        r_grip = - (grip_t - grip_target) ** 2
-        r_grip = r_grip * (g_align * g_zpick).detach()
+        # Reward closing near pick, penalize closing when far.
+        near_pick = (g_align * g_zpick).detach()          # [0,1]
+        r_grip = near_pick * grip_t - (1.0 - g_align.detach()) * grip_t
 
         # -------------------------
         # Stage 4: Lift / Carry / Place
@@ -384,14 +383,19 @@ class YamManipEnv(DirectRLEnv):
 
         near_goal = d_goal_xy < (2.0 * float(self.cfg.goal_xy_thresh))
         r_place = (0.5 * r_carry + 0.5 * r_place_z) * near_goal.to(torch.float32)
-        # Gate lift/carry/place by a crude "held" predicate to avoid rewards from jostling only.
+        # Gate lift/carry/place by a "held" predicate (closed + near block).
         d_ee_block = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
-        close_enough = d_ee_block < 0.04
-        held = (grip_t > float(self.cfg.grip_closed_thresh)) & close_enough & (block_clear > 0.01)
+        close_enough = d_ee_block < 0.035
+        held = (grip_t > float(self.cfg.grip_closed_thresh)) & close_enough
         held_f = held.to(torch.float32)
         r_lift = r_lift * held_f
         r_carry = r_carry * held_f
         r_place = r_place * held_f
+
+        # Reward upward progress of the grasp point while "held".
+        dz = grasp_pos[:, 2] - self.prev_grasp_z
+        r_lift_prog = held_f * torch.clamp(dz, min=0.0, max=0.01) / 0.01
+        self.prev_grasp_z = grasp_pos[:, 2].detach()
 
         # Placement success + phase advance (keep your logic)
         grip_open = grip_t < float(self.cfg.grip_open_thresh)
@@ -427,12 +431,13 @@ class YamManipEnv(DirectRLEnv):
         # Combine
         # -------------------------
         # Weights (start conservative; you can tune later)
-        w_pose   = 2.0
-        w_prog   = 1.0
-        w_grip   = 0.5
-        w_lift   = 2.0
-        w_carry  = 2.0
-        w_place  = 1.0
+        w_pose      = 2.0
+        w_prog      = 1.0
+        w_grip      = 1.0
+        w_lift      = 2.0
+        w_carry     = 2.0
+        w_place     = 1.0
+        w_lift_prog = 2.0
 
         reward = (
             active.to(torch.float32)
@@ -441,6 +446,7 @@ class YamManipEnv(DirectRLEnv):
                 + w_prog * r_prog
                 + w_grip * r_grip
                 + w_lift * r_lift
+                + w_lift_prog * r_lift_prog
                 + w_carry * r_carry
                 + w_place * r_place
                 + r_smooth
@@ -580,6 +586,7 @@ class YamManipEnv(DirectRLEnv):
         grasp_pos = grasp_pos_w - self.scene.env_origins
         xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
         self.prev_wp_dist[env_ids] = xy_block[env_ids].detach()
+        self.prev_grasp_z[env_ids] = grasp_pos[env_ids, 2].detach()
         self._debug_print_robot_state()
 
     def _resolve_robot_entities(self) -> None:
@@ -655,13 +662,10 @@ class YamManipEnv(DirectRLEnv):
         )
 
     def _ee_grasp_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
-        ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
-        ee_pos_w = ee_pose_w[:, 0:3]
-        ee_quat_w = ee_pose_w[:, 3:7]
-        offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
-        offset = offset.unsqueeze(0).expand(ee_quat_w.shape[0], 3)
-        offset_w = torch_utils.quat_apply(ee_quat_w, offset)
-        return ee_pos_w + offset_w, ee_quat_w
+        # Midpoint of finger tips (no extra offset) is the grasp point.
+        tip_pos_w = self.robot.data.body_state_w[:, self.marker_body_ids[:2], 0:3].mean(dim=1)
+        ee_quat_w = self.robot.data.body_state_w[:, self.ee_body_id, 3:7]
+        return tip_pos_w, ee_quat_w
 
     def _grip_close_t(self) -> torch.Tensor:
         q = self.robot.data.joint_pos[:, self.grip_joint_ids]
@@ -680,10 +684,7 @@ class YamManipEnv(DirectRLEnv):
             tip_pos_w = self.robot.data.body_state_w[:, self.marker_body_ids[:2], 0:3].mean(dim=1)
         else:
             tip_pos_w = ee_pose_w[:, 0:3]
-        offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
-        offset = offset.unsqueeze(0).expand(ee_quat_w.shape[0], 3)
-        offset_w = torch_utils.quat_apply(ee_quat_w, offset)
-        marker_pos = tip_pos_w + offset_w
+        marker_pos = tip_pos_w
         marker_quat = ee_quat_w
         marker_state = self.site_marker.data.default_root_state[env_ids].clone()
         marker_state[:, 0:3] = marker_pos[env_ids]
