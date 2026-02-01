@@ -46,11 +46,21 @@ YAM_CFG = ArticulationCfg(
     actuators={
         # USD exposes only joint1..joint8, so bind actuators to those names.
         "arm": ImplicitActuatorCfg(
-            joint_names_expr=["joint[1-8]"],
+            joint_names_expr=["joint[1-6]"],
             effort_limit_sim=60.0,
             velocity_limit_sim=10.0,
             stiffness=600.0,
             damping=50.0,
+            friction=0.0,
+            armature=0.0,
+        ),
+        # Softer, more damped drive for the gripper to allow compliant contact.
+        "gripper": ImplicitActuatorCfg(
+            joint_names_expr=["joint[7-8]"],
+            effort_limit_sim=40.0,
+            velocity_limit_sim=10.0,
+            stiffness=120.0,
+            damping=350.0,
             friction=0.0,
             armature=0.0,
         ),

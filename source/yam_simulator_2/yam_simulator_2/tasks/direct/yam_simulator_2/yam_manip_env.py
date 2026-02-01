@@ -61,65 +61,14 @@ def compute_policy_obs(
         dim=-1,
     )
     return obs
-
-
-@torch.jit.script
-def compute_reward_core(
-    phase: torch.Tensor,
-    actions_xyz: torch.Tensor,
-    tgt_block_pos: torch.Tensor,
-    tgt_goal_pos: torch.Tensor,
-    grasp_pos: torch.Tensor,
-    table_top_z: float,
-    block_half_z: float,
-    grip_t: torch.Tensor,
-    grip_closed_thresh: float,
-    grip_open_thresh: float,
-    near_thresh: float,
-    lift_height: float,
-    goal_xy_thresh: float,
-    place_z_thresh: float,
-    reach_k: float,
-    goal_k: float,
-    reach_w: float,
-    grasp_w: float,
-    lift_w: float,
-    carry_w: float,
-    step_penalty_w: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-
-    active = phase < 3
-    d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
-    d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
-
-    grip_closed = grip_t > grip_closed_thresh
-    grip_open = grip_t < grip_open_thresh
-
-    near = d_reach < near_thresh
-    lifted = (tgt_block_pos[:, 2] - table_top_z) > lift_height
-    at_goal_xy = d_goal_xy < goal_xy_thresh
-    near_table = torch.abs(tgt_block_pos[:, 2] - (table_top_z + block_half_z)) < place_z_thresh
-
-    grasped = (near & grip_closed) | lifted
-
-    r_reach = (1.0 - torch.tanh(reach_k * d_reach)) * (~grasped) * active
-    r_grasp = (near.to(torch.float32) * grip_t) * (~lifted) * active
-    r_lift = torch.clamp((tgt_block_pos[:, 2] - table_top_z) / lift_height, 0.0, 1.0) * grasped * active
-    r_carry = (1.0 - torch.tanh(goal_k * d_goal_xy)) * grasped * active
-
-    placed = at_goal_xy & near_table & grip_open & active
-
-    act_pen = step_penalty_w * torch.sum(actions_xyz * actions_xyz, dim=-1)
-    reward = reach_w * r_reach + grasp_w * r_grasp + lift_w * r_lift + carry_w * r_carry - act_pen
-    return reward, placed
-
-
 class YamManipEnv(DirectRLEnv):
     cfg: YamManipEnvCfg
 
     def __init__(self, cfg: YamManipEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
         self.actions = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
+        # Keep the gripper open by default (action semantic: 1=open, 0=closed).
+        self.actions[:, 5] = 1.0
         self._ik = DifferentialIKController(self.cfg.diff_ik_cfg, num_envs=self.num_envs, device=self.device)
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
@@ -188,19 +137,6 @@ class YamManipEnv(DirectRLEnv):
         # Defer entity resolution until the simulation initializes (e.g., in reset).
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
-        # Fail fast if caller passes a mismatched action vector. This keeps the
-        # policy/action_dim consistent with YamManipEnvCfg.action_space (6):
-        # [dx, dy, dz, d_roll, d_pitch, gripper].
-        if actions.shape[1] != self.cfg.action_space:
-            raise RuntimeError(
-                f"Expected actions with {self.cfg.action_space} dims, got {tuple(actions.shape)}"
-            )
-        # Catch NaNs/Infs coming from the policy before they hit the sim.
-        if not torch.isfinite(actions).all():
-            bad_env = (~torch.isfinite(actions)).any(dim=1).nonzero(as_tuple=False).squeeze(-1)
-            e = int(bad_env[0].item())
-            print(f"[BAD ACT] env={e} actions[e]={actions[e].detach().cpu().tolist()}")
-            raise RuntimeError("Non-finite action input from policy")
         self.prev_actions = self.actions.clone()
         self.actions = actions.clone()
 
@@ -211,7 +147,8 @@ class YamManipEnv(DirectRLEnv):
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
         tilt_cmd = torch.clamp(self.actions[:, 3:5], -1.0, 1.0)
-        grip_cmd = torch.clamp(self.actions[:, 5], -1.0, 1.0)
+        # Binary gripper command: 1 = fully open, 0 = fully closed.
+        grip_cmd = torch.clamp(self.actions[:, 5], 0.0, 1.0)
 
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
@@ -246,22 +183,17 @@ class YamManipEnv(DirectRLEnv):
         jacobian = jacobian_w[:, self.ee_body_id - 1, :, self.arm_joint_ids]
         joint_pos = self.robot.data.joint_pos[:, self.arm_joint_ids]
         lims = self.robot.data.soft_joint_pos_limits[:, self.arm_joint_ids]
-        self._debug_check_tensor("soft_joint_pos_limits", lims)
-        self._debug_check_tensor("jacobian", jacobian)
-        self._debug_check_tensor("joint_pos_arm", joint_pos)
 
         ik_cmd = torch.cat([self.ee_pos_target_b, self.ee_quat_target_b], dim=-1)
         self._ik.set_command(ik_cmd)
         arm_q_des = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
         arm_q_des = torch.clamp(arm_q_des, lims[..., 0], lims[..., 1])
-        self._debug_check_tensor("arm_q_des", arm_q_des)
         self.robot.set_joint_position_target(arm_q_des, joint_ids=self.arm_joint_ids)
 
-        # Treat non-positive commands as "keep open" so default 0.0 stays open.
-        t = torch.clamp(grip_cmd, 0.0, 1.0)
         open_q = float(self.cfg.gripper_open)
         closed_q = float(self.cfg.gripper_closed)
-        finger_q = open_q + t * (closed_q - open_q)
+        is_open = grip_cmd >= 0.5
+        finger_q = torch.where(is_open, open_q, closed_q)
         grip_q_des = torch.stack([finger_q, finger_q], dim=1)
         self.robot.set_joint_position_target(grip_q_des, joint_ids=self.grip_joint_ids)
         self.robot.write_data_to_sim()
@@ -299,19 +231,6 @@ class YamManipEnv(DirectRLEnv):
         drop_b = to_base(self.dropoff_blue.data.root_pos_w)
         drop_y = to_base(self.dropoff_yellow.data.root_pos_w)
 
-        self._debug_check_tensor("ee_pos_b", ee_pos_b)
-        self._debug_check_tensor("ee_pos_target_b", self.ee_pos_target_b)
-        self._debug_check_tensor("grip_t", grip_t)
-        self._debug_check_tensor("red_pos", red_pos)
-        self._debug_check_tensor("blue_pos", blue_pos)
-        self._debug_check_tensor("yellow_pos", yellow_pos)
-        self._debug_check_tensor("red_vel", red_vel)
-        self._debug_check_tensor("blue_vel", blue_vel)
-        self._debug_check_tensor("yellow_vel", yellow_vel)
-        self._debug_check_tensor("drop_r", drop_r)
-        self._debug_check_tensor("drop_b", drop_b)
-        self._debug_check_tensor("drop_y", drop_y)
-
         # Keep ordering consistent: blue, red, yellow (for both positions and goals).
         obs = compute_policy_obs(
             self.phase,
@@ -344,14 +263,7 @@ class YamManipEnv(DirectRLEnv):
                 f"[OBS@{self._obs_step_counter}] env0 min={sample.min():.3f} "
                 f"max={sample.max():.3f} first10={sample[:10].tolist()}"
             )
-        # Hard check across all envs; stop immediately on any non-finite observation.
-        if not torch.isfinite(obs).all():
-            bad_env = (~torch.isfinite(obs)).any(dim=1).nonzero(as_tuple=False).squeeze(-1)
-            e = int(bad_env[0].item())
-            print(f"[BAD OBS] env={e} obs[e]=", obs[e].detach().cpu().tolist())
-            raise RuntimeError("Non-finite observation")
 
-        self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -538,12 +450,6 @@ class YamManipEnv(DirectRLEnv):
             + bonus
         )
 
-        if not torch.isfinite(reward).all():
-            bad_env = (~torch.isfinite(reward)).nonzero(as_tuple=False).squeeze(-1)
-            e = int(bad_env[0].item())
-            print(f"[BAD REW] env={e} rew={float(reward[e].item())}")
-            raise RuntimeError("Non-finite reward")
-
         return reward
 
 
@@ -633,6 +539,7 @@ class YamManipEnv(DirectRLEnv):
             block.reset()
 
         self.actions[env_ids] = 0.0
+        self.actions[env_ids, 5] = 1.0
         self.scene.write_data_to_sim()
         self.sim.step(render=False)
         self.scene.update(dt=self.physics_dt)
@@ -706,23 +613,6 @@ class YamManipEnv(DirectRLEnv):
         robot_name = getattr(self.robot, "prim_path", "robot")
         print(f"[DEBUG] {robot_name} joint positions:", dict(zip(joint_names, joint_pos)))
         self._debug_printed = True
-
-    def _debug_check_tensor(self, name: str, tensor: torch.Tensor, flag_attr: str | None = None) -> None:
-        if not self.cfg.debug_nan_checks:
-            return
-        if name in self._debug_bad_tensors:
-            return
-        if flag_attr is not None and getattr(self, flag_attr):
-            return
-        if not torch.isfinite(tensor).all():
-            bad = torch.where(~torch.isfinite(tensor))
-            idx = torch.stack(bad, dim=-1)
-            max_print = int(self.cfg.debug_nan_max_print)
-            sample_idx = idx[:max_print].detach().cpu().tolist()
-            print(f"[DEBUG] non-finite {name} shape={tuple(tensor.shape)} idx={sample_idx}")
-            if flag_attr is not None:
-                setattr(self, flag_attr, True)
-            self._debug_bad_tensors.add(name)
 
     def _set_robot_home(self, env_ids) -> None:
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
