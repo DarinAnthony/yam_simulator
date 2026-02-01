@@ -186,6 +186,12 @@ class YamManipEnv(DirectRLEnv):
             raise RuntimeError(
                 f"Expected actions with {self.cfg.action_space} dims, got {tuple(actions.shape)}"
             )
+        # Catch NaNs/Infs coming from the policy before they hit the sim.
+        if not torch.isfinite(actions).all():
+            bad_env = (~torch.isfinite(actions)).any(dim=1).nonzero(as_tuple=False).squeeze(-1)
+            e = int(bad_env[0].item())
+            print(f"[BAD ACT] env={e} actions[e]={actions[e].detach().cpu().tolist()}")
+            raise RuntimeError("Non-finite action input from policy")
         self.actions = actions.clone()
 
     def _apply_action(self) -> None:
@@ -227,11 +233,14 @@ class YamManipEnv(DirectRLEnv):
         jacobian_w = self.robot.root_physx_view.get_jacobians()
         jacobian = jacobian_w[:, self.ee_body_id - 1, :, self.arm_joint_ids]
         joint_pos = self.robot.data.joint_pos[:, self.arm_joint_ids]
+        lims = self.robot.data.soft_joint_pos_limits[:, self.arm_joint_ids]
+        self._debug_check_tensor("soft_joint_pos_limits", lims)
+        self._debug_check_tensor("jacobian", jacobian)
+        self._debug_check_tensor("joint_pos_arm", joint_pos)
 
         ik_cmd = torch.cat([self.ee_pos_target_b, self.ee_quat_target_b], dim=-1)
         self._ik.set_command(ik_cmd)
         arm_q_des = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
-        lims = self.robot.data.soft_joint_pos_limits[:, self.arm_joint_ids]
         arm_q_des = torch.clamp(arm_q_des, lims[..., 0], lims[..., 1])
         self._debug_check_tensor("arm_q_des", arm_q_des)
         self.robot.set_joint_position_target(arm_q_des, joint_ids=self.arm_joint_ids)
@@ -314,6 +323,12 @@ class YamManipEnv(DirectRLEnv):
             f"[OBS@{self._obs_step_counter}] env0 min={sample.min():.3f} "
             f"max={sample.max():.3f} first10={sample[:10].tolist()}"
         )
+        # Hard check across all envs; stop immediately on any non-finite observation.
+        if not torch.isfinite(obs).all():
+            bad_env = (~torch.isfinite(obs)).any(dim=1).nonzero(as_tuple=False).squeeze(-1)
+            e = int(bad_env[0].item())
+            print(f"[BAD OBS] env={e} obs[e]=", obs[e].detach().cpu().tolist())
+            raise RuntimeError("Non-finite observation")
 
         self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
@@ -391,7 +406,13 @@ class YamManipEnv(DirectRLEnv):
             self.phase[newly_placed] += 1
             bonus[newly_placed] = float(self.cfg.place_bonus)
 
-        return base_reward + bonus
+        reward = base_reward + bonus
+        if not torch.isfinite(reward).all():
+            bad_env = (~torch.isfinite(reward)).nonzero(as_tuple=False).squeeze(-1)
+            e = int(bad_env[0].item())
+            print(f"[BAD REW] env={e} rew={float(reward[e].item())}")
+            raise RuntimeError("Non-finite reward")
+        return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._resolve_robot_entities()
