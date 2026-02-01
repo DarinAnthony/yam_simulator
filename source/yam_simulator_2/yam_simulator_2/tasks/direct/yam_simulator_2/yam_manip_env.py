@@ -127,6 +127,7 @@ class YamManipEnv(DirectRLEnv):
         self._debug_printed = False
         self._debug_bad_obs = False
         self._debug_bad_rew = False
+        self._debug_bad_tensors = set()
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -228,6 +229,19 @@ class YamManipEnv(DirectRLEnv):
         drop_b = self.dropoff_blue.data.root_pos_w - self.scene.env_origins
         drop_y = self.dropoff_yellow.data.root_pos_w - self.scene.env_origins
 
+        self._debug_check_tensor("ee_pos_b", ee_pos_b)
+        self._debug_check_tensor("ee_pos_target_b", self.ee_pos_target_b)
+        self._debug_check_tensor("grip_t", grip_t)
+        self._debug_check_tensor("red_pos", red_pos)
+        self._debug_check_tensor("blue_pos", blue_pos)
+        self._debug_check_tensor("yellow_pos", yellow_pos)
+        self._debug_check_tensor("red_vel", red_vel)
+        self._debug_check_tensor("blue_vel", blue_vel)
+        self._debug_check_tensor("yellow_vel", yellow_vel)
+        self._debug_check_tensor("drop_r", drop_r)
+        self._debug_check_tensor("drop_b", drop_b)
+        self._debug_check_tensor("drop_y", drop_y)
+
         obs = compute_policy_obs(
             self.phase,
             self.sorted_mask,
@@ -280,6 +294,12 @@ class YamManipEnv(DirectRLEnv):
         grip_t = self._grip_close_t()
         table_top_z = self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
         block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0
+
+        self._debug_check_tensor("actions_xyz", self.actions[:, 0:3])
+        self._debug_check_tensor("tgt_block_pos", tgt_block_pos)
+        self._debug_check_tensor("tgt_goal_pos", tgt_goal_pos)
+        self._debug_check_tensor("grasp_pos", grasp_pos)
+        self._debug_check_tensor("grip_t_rew", grip_t)
 
         base_reward, placed = compute_reward_core(
             phase=phase,
@@ -433,13 +453,22 @@ class YamManipEnv(DirectRLEnv):
         print(f"[DEBUG] {robot_name} joint positions:", dict(zip(joint_names, joint_pos)))
         self._debug_printed = True
 
-    def _debug_check_tensor(self, name: str, tensor: torch.Tensor, flag_attr: str) -> None:
-        if getattr(self, flag_attr):
+    def _debug_check_tensor(self, name: str, tensor: torch.Tensor, flag_attr: str | None = None) -> None:
+        if not self.cfg.debug_nan_checks:
+            return
+        if name in self._debug_bad_tensors:
+            return
+        if flag_attr is not None and getattr(self, flag_attr):
             return
         if not torch.isfinite(tensor).all():
             bad = torch.where(~torch.isfinite(tensor))
-            print(f"[DEBUG] non-finite {name} at indices:", bad)
-            setattr(self, flag_attr, True)
+            idx = torch.stack(bad, dim=-1)
+            max_print = int(self.cfg.debug_nan_max_print)
+            sample_idx = idx[:max_print].detach().cpu().tolist()
+            print(f"[DEBUG] non-finite {name} shape={tuple(tensor.shape)} idx={sample_idx}")
+            if flag_attr is not None:
+                setattr(self, flag_attr, True)
+            self._debug_bad_tensors.add(name)
 
     def _set_robot_home(self, env_ids) -> None:
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()

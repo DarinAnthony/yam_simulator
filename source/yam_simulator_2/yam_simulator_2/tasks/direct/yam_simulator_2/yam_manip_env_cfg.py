@@ -119,6 +119,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     )
     marker_body_names: list[str] = ["tip_left", "tip_right"]
     debug_print_joint_pos: bool = True
+    debug_nan_checks: bool = True
+    debug_nan_max_print: int = 10
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
         command_type="position",
