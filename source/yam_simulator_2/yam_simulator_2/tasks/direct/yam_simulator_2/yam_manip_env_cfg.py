@@ -118,6 +118,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
         body_names=["gripper"],
     )
     marker_body_names: list[str] = ["tip_left", "tip_right"]
+    debug_print_joint_pos: bool = True
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
         command_type="position",

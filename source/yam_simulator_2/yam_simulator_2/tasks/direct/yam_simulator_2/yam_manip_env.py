@@ -31,6 +31,7 @@ class YamManipEnv(DirectRLEnv):
         self._entities_resolved = False
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
+        self._debug_printed = False
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -321,6 +322,7 @@ class YamManipEnv(DirectRLEnv):
         self.ee_pos_target_b[env_ids] = ee_pos_b[env_ids]
         self.ee_quat_target_b[env_ids] = ee_quat_b[env_ids]
         self._update_site_marker(env_ids=env_ids)
+        self._debug_print_robot_state()
 
     def _resolve_robot_entities(self) -> None:
         if self._entities_resolved:
@@ -341,6 +343,18 @@ class YamManipEnv(DirectRLEnv):
         self.ee_body_id = self.cfg.robot_entity.body_ids[0]
         self.marker_body_ids, _ = self.robot.find_bodies(self.cfg.marker_body_names, preserve_order=True)
         self._entities_resolved = True
+
+    def _debug_print_robot_state(self) -> None:
+        if self._debug_printed or not self.cfg.debug_print_joint_pos:
+            return
+        try:
+            joint_names = list(self.robot.joint_names)
+        except Exception:
+            joint_names = [f"joint_{i}" for i in range(self.robot.num_joints)]
+        joint_pos = self.robot.data.joint_pos[0].detach().cpu().tolist()
+        robot_name = getattr(self.robot, "prim_path", "robot")
+        print(f"[DEBUG] {robot_name} joint positions:", dict(zip(joint_names, joint_pos)))
+        self._debug_printed = True
 
     def _set_robot_home(self, env_ids) -> None:
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
