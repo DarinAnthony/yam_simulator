@@ -63,7 +63,7 @@ params:
     schedule_type: standard
     kl_threshold: 0.01
 
-    max_epochs: 800               # manipulation usually needs more than 150
+    max_epochs: 2000               # manipulation usually needs more than 150
     save_best_after: 50
     save_frequency: 50
     print_stats: True
