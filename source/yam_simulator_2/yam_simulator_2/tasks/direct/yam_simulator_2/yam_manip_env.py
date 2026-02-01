@@ -352,6 +352,23 @@ class YamManipEnv(DirectRLEnv):
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
 
+    def _ee_grasp_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
+        ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
+        ee_pos_w = ee_pose_w[:, 0:3]
+        ee_quat_w = ee_pose_w[:, 3:7]
+        offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
+        offset = offset.unsqueeze(0).expand(ee_quat_w.shape[0], 3)
+        offset_w = torch_utils.quat_apply(ee_quat_w, offset)
+        return ee_pos_w + offset_w, ee_quat_w
+
+    def _grip_close_t(self) -> torch.Tensor:
+        q = self.robot.data.joint_pos[:, self.grip_joint_ids]
+        open_q = float(self.cfg.gripper_open)
+        closed_q = float(self.cfg.gripper_closed)
+        t = (q - open_q) / (closed_q - open_q)
+        t = torch.clamp(t, 0.0, 1.0)
+        return t.mean(dim=1)
+
     def _update_site_marker(self, env_ids=None) -> None:
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
