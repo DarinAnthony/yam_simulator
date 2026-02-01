@@ -34,6 +34,7 @@ YAM_CFG = ArticulationCfg(
             enabled_self_collisions=False,
             solver_position_iteration_count=12,
             solver_velocity_iteration_count=2,
+            fix_root_link=True,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(

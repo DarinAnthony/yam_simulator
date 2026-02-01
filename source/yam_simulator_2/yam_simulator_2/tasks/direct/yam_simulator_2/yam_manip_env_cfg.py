@@ -130,6 +130,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
         command_type="pose",
         use_relative_mode=False,
         ik_method="dls",
+        ik_params={"lambda_val": 0.05},
     )
 
     # robot(s)

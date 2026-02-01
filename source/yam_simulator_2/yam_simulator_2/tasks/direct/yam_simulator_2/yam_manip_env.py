@@ -86,6 +86,7 @@ def compute_reward_core(
     carry_w: float,
     step_penalty_w: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+
     active = phase < 3
     d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
     d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
@@ -121,8 +122,6 @@ class YamManipEnv(DirectRLEnv):
         self._ik = DifferentialIKController(self.cfg.diff_ik_cfg, num_envs=self.num_envs, device=self.device)
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
-        self.ee_quat_nominal_b = torch.zeros((self.num_envs, 4), device=self.device)
-        self.ee_yaw_target = torch.zeros((self.num_envs,), device=self.device)
         self._entities_resolved = False
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
@@ -176,8 +175,7 @@ class YamManipEnv(DirectRLEnv):
         delta_pos = torch.clamp(self.actions[:, 0:3], -1.0, 1.0)
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
-        tilt_cmd = torch.clamp(self.actions[:, 3:5], -1.0, 1.0)
-        grip_cmd = torch.clamp(self.actions[:, 5], -1.0, 1.0)
+        grip_cmd = torch.clamp(self.actions[:, 3], -1.0, 1.0)
 
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
@@ -189,56 +187,20 @@ class YamManipEnv(DirectRLEnv):
         )
 
         self.ee_pos_target_b = self.ee_pos_target_b + delta_pos
-
-        phase = self.phase
-        tgt_idx = torch.clamp(phase, 0, 2)
-        block_pos = torch.stack(
-            [
-                self.blue_block.data.root_pos_w - self.scene.env_origins,
-                self.red_block.data.root_pos_w - self.scene.env_origins,
-                self.yellow_block.data.root_pos_w - self.scene.env_origins,
-            ],
-            dim=1,
-        )
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        tgt_block_pos = block_pos[env_ids, tgt_idx]
-
-        grasp_pos_w, _ = self._ee_grasp_pos_w()
-        grasp_pos = grasp_pos_w - self.scene.env_origins
-        v = tgt_block_pos - grasp_pos
-        v_xy = v[:, 0:2]
-        dist_xy = torch.linalg.norm(v_xy, dim=-1)
-        yaw_des = torch.atan2(v_xy[:, 1], v_xy[:, 0])
-        yaw_err = self._wrap_to_pi(yaw_des - self.ee_yaw_target)
-        do_update = dist_xy > float(self.cfg.yaw_update_eps)
-        yaw_step = torch.clamp(
-            yaw_err, -float(self.cfg.yaw_rate_limit), float(self.cfg.yaw_rate_limit)
-        )
-        self.ee_yaw_target = torch.where(do_update, self.ee_yaw_target + yaw_step, self.ee_yaw_target)
-
-        z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(self.num_envs, 3)
-        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(self.num_envs, 3)
-        y_axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).expand(self.num_envs, 3)
-
-        q_yaw = self._quat_from_angle_axis(self.ee_yaw_target, z_axis)
-        roll = tilt_cmd[:, 0] * float(self.cfg.tilt_scale)
-        pitch = tilt_cmd[:, 1] * float(self.cfg.tilt_scale)
-        q_roll = self._quat_from_angle_axis(roll, x_axis)
-        q_pitch = self._quat_from_angle_axis(pitch, y_axis)
-        q_tilt = self._quat_mul(q_pitch, q_roll)
-
-        q_target = self._quat_mul(q_yaw, self.ee_quat_nominal_b)
-        q_target = self._quat_mul(q_tilt, q_target)
-        q_target = q_target / torch.linalg.norm(q_target, dim=-1, keepdim=True).clamp_min(1e-8)
-        self.ee_quat_target_b = q_target
+        ee_min = torch.tensor([-0.25, -0.25, -0.10], device=self.device)
+        ee_max = torch.tensor([0.45, 0.25, 0.35], device=self.device)
+        self.ee_pos_target_b = torch.clamp(self.ee_pos_target_b, ee_min, ee_max)
 
         jacobian_w = self.robot.root_physx_view.get_jacobians()
         jacobian = jacobian_w[:, self.ee_body_id - 1, :, self.arm_joint_ids]
         joint_pos = self.robot.data.joint_pos[:, self.arm_joint_ids]
 
-        ik_cmd = torch.cat([self.ee_pos_target_b, self.ee_quat_target_b], dim=-1)  # (N,7)
+        ik_cmd = torch.cat([self.ee_pos_target_b, self.ee_quat_target_b], dim=-1)
         self._ik.set_command(ik_cmd)
         arm_q_des = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
+        lims = self.robot.data.soft_joint_pos_limits[:, self.arm_joint_ids]
+        arm_q_des = torch.clamp(arm_q_des, lims[..., 0], lims[..., 1])
+        self._debug_check_tensor("arm_q_des", arm_q_des)
         self.robot.set_joint_position_target(arm_q_des, joint_ids=self.arm_joint_ids)
 
         # Treat non-positive commands as "keep open" so default 0.0 stays open.
@@ -517,11 +479,6 @@ class YamManipEnv(DirectRLEnv):
             if flag_attr is not None:
                 setattr(self, flag_attr, True)
             self._debug_bad_tensors.add(name)
-            return
-        max_abs = torch.max(torch.abs(tensor)).item() if tensor.numel() > 0 else 0.0
-        if max_abs > float(self.cfg.debug_abs_max):
-            print(f"[DEBUG] large {name} max_abs={max_abs:.3e} shape={tuple(tensor.shape)}")
-            self._debug_bad_tensors.add(name)
 
     def _set_robot_home(self, env_ids) -> None:
         joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
@@ -533,35 +490,6 @@ class YamManipEnv(DirectRLEnv):
         joint_pos[:, self.grip_joint_ids] = float(self.cfg.gripper_open)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
-
-    def _wrap_to_pi(self, a: torch.Tensor) -> torch.Tensor:
-        return (a + torch.pi) % (2 * torch.pi) - torch.pi
-
-    def _quat_to_yaw(self, q: torch.Tensor) -> torch.Tensor:
-        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-        t0 = 2.0 * (w * z + x * y)
-        t1 = 1.0 - 2.0 * (y * y + z * z)
-        return torch.atan2(t0, t1)
-
-    def _quat_from_angle_axis(self, angle: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
-        half = 0.5 * angle
-        s = torch.sin(half).unsqueeze(-1)
-        qw = torch.cos(half).unsqueeze(-1)
-        qxyz = axis * s
-        return torch.cat([qw, qxyz], dim=-1)
-
-    def _quat_mul(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
-        w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
-        w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
-        return torch.stack(
-            [
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            ],
-            dim=-1,
-        )
 
     def _ee_grasp_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
