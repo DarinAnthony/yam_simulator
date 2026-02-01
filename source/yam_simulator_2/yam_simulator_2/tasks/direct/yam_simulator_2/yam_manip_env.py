@@ -86,7 +86,6 @@ def compute_reward_core(
     carry_w: float,
     step_penalty_w: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # type: (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, float, torch.Tensor, float, float, float, float, float, float, float, float, float, float, float, float, float, float) -> Tuple[torch.Tensor, torch.Tensor]
     active = phase < 3
     d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
     d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
