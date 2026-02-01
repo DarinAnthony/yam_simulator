@@ -305,12 +305,15 @@ class YamManipEnv(DirectRLEnv):
             print(f"[DEBUG] obs magnitude clamp: max_abs={max_abs.item():.3e}")
             obs = torch.clamp(obs, -self.cfg.debug_abs_max, self.cfg.debug_abs_max)
 
-        # Lightweight periodic print to inspect observations (every 100 env steps).
+        # Print observations just before returning them to the policy (env0 only to
+        # avoid log spam). This is executed every env step so you can see what the
+        # policy will consume.
         self._obs_step_counter += 1
-        if self._obs_step_counter % 100 == 0:
-            # Print only the first environment to keep logs readable.
-            sample = obs[0].detach().cpu()
-            print(f"[OBS@{self._obs_step_counter}] env0 obs min={sample.min():.3f} max={sample.max():.3f} first10={sample[:10].tolist()}")
+        sample = obs[0].detach().cpu()
+        print(
+            f"[OBS@{self._obs_step_counter}] env0 min={sample.min():.3f} "
+            f"max={sample.max():.3f} first10={sample[:10].tolist()}"
+        )
 
         self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
