@@ -122,6 +122,7 @@ class YamManipEnv(DirectRLEnv):
         self._ik = DifferentialIKController(self.cfg.diff_ik_cfg, num_envs=self.num_envs, device=self.device)
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
+        self.ee_quat_nominal_b = torch.zeros((self.num_envs, 4), device=self.device)
         self._entities_resolved = False
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
@@ -138,8 +139,6 @@ class YamManipEnv(DirectRLEnv):
             self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
         if not hasattr(self, "ee_quat_nominal_b"):
             self.ee_quat_nominal_b = torch.zeros((self.num_envs, 4), device=self.device)
-        if not hasattr(self, "ee_yaw_target"):
-            self.ee_yaw_target = torch.zeros((self.num_envs,), device=self.device)
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -179,6 +178,13 @@ class YamManipEnv(DirectRLEnv):
         # Defer entity resolution until the simulation initializes (e.g., in reset).
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
+        # Fail fast if caller passes a mismatched action vector. This keeps the
+        # policy/action_dim consistent with YamManipEnvCfg.action_space (6):
+        # [dx, dy, dz, d_roll, d_pitch, gripper].
+        if actions.shape[1] != self.cfg.action_space:
+            raise RuntimeError(
+                f"Expected actions with {self.cfg.action_space} dims, got {tuple(actions.shape)}"
+            )
         self.actions = actions.clone()
 
     def _apply_action(self) -> None:
@@ -187,7 +193,8 @@ class YamManipEnv(DirectRLEnv):
         delta_pos = torch.clamp(self.actions[:, 0:3], -1.0, 1.0)
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
-        grip_cmd = torch.clamp(self.actions[:, 3], -1.0, 1.0)
+        tilt_cmd = torch.clamp(self.actions[:, 3:5], -1.0, 1.0)
+        grip_cmd = torch.clamp(self.actions[:, 5], -1.0, 1.0)
 
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
@@ -202,6 +209,19 @@ class YamManipEnv(DirectRLEnv):
         ee_min = torch.tensor([-0.25, -0.25, -0.10], device=self.device)
         ee_max = torch.tensor([0.45, 0.25, 0.35], device=self.device)
         self.ee_pos_target_b = torch.clamp(self.ee_pos_target_b, ee_min, ee_max)
+
+        # Orientation target: apply small roll/pitch deltas; yaw held by target
+        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(self.num_envs, 3)
+        y_axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).expand(self.num_envs, 3)
+        roll = tilt_cmd[:, 0] * float(self.cfg.tilt_scale)
+        pitch = tilt_cmd[:, 1] * float(self.cfg.tilt_scale)
+        if torch.any(roll != 0.0) or torch.any(pitch != 0.0):
+            q_roll = self._quat_from_angle_axis(roll, x_axis)
+            q_pitch = self._quat_from_angle_axis(pitch, y_axis)
+            q_tilt = self._quat_mul(q_pitch, q_roll)
+            q_target = self._quat_mul(q_tilt, self.ee_quat_target_b)
+            q_target = q_target / torch.linalg.norm(q_target, dim=-1, keepdim=True).clamp_min(1e-8)
+            self.ee_quat_target_b = q_target
 
         jacobian_w = self.robot.root_physx_view.get_jacobians()
         jacobian = jacobian_w[:, self.ee_body_id - 1, :, self.arm_joint_ids]
@@ -439,7 +459,6 @@ class YamManipEnv(DirectRLEnv):
         self.ee_pos_target_b[env_ids] = ee_pos_b[env_ids]
         self.ee_quat_target_b[env_ids] = ee_quat_b[env_ids]
         self.ee_quat_nominal_b[env_ids] = ee_quat_b[env_ids]
-        self.ee_yaw_target[env_ids] = self._quat_to_yaw(ee_quat_b[env_ids])
         self._ik.reset()
         self._update_site_marker(env_ids=env_ids)
         self._debug_print_robot_state()
