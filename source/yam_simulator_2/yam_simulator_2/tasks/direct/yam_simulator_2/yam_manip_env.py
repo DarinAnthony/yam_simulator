@@ -462,8 +462,26 @@ class YamManipEnv(DirectRLEnv):
         r_wp_pick = float(self.cfg.wp_pick_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * (~grasped) * active
         r_wp_place = float(self.cfg.wp_place_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * grasped * active
 
-        r_prog = float(self.cfg.wp_progress_w) * (self.prev_wp_dist - dist_wp) * active
-        self.prev_wp_dist = dist_wp.detach()
+        # Progress shaping on XY only to avoid moving-Z-target trap.
+        dist_prog = torch.where(grasped, xy_goal, xy_block)
+        r_prog = float(self.cfg.wp_progress_w) * (self.prev_wp_dist - dist_prog) * active
+        self.prev_wp_dist = dist_prog.detach()
+
+        # Descend reward once aligned in XY.
+        aligned_xy = xy_block < float(self.cfg.wp_gate_xy)
+        z_pick = tgt_block_pos[:, 2] + pick_z_off
+        z_err_pick = torch.abs(grasp_pos[:, 2] - z_pick)
+        r_descend = (
+            float(self.cfg.descend_w)
+            * (1.0 - torch.tanh(float(self.cfg.descend_k) * z_err_pick))
+            * aligned_xy
+            * (~grasped)
+            * active
+        )
+
+        # Encourage closing when aligned and near pick height.
+        close_zone = aligned_xy & (z_err_pick < float(self.cfg.close_z_gate)) & (~lifted) & active
+        r_close = float(self.cfg.close_w) * grip_t * close_zone.to(torch.float32)
 
         clearance = torch.clamp((tgt_block_pos[:, 2] + float(self.cfg.clearance_z)) - grasp_pos[:, 2], min=0.0)
         far_xy = xy_block > float(self.cfg.wp_gate_xy)
@@ -484,7 +502,7 @@ class YamManipEnv(DirectRLEnv):
         d_tilt = self.actions[:, 3:5] - self.prev_actions[:, 3:5]
         r_tilt_smooth = -float(self.cfg.tilt_smooth_w) * torch.sum(d_tilt * d_tilt, dim=-1) * active
 
-        reward = reward + r_wp_pick + r_wp_place + r_prog + r_clear + r_vel + r_acc + r_tilt_smooth
+        reward = reward + r_wp_pick + r_wp_place + r_prog + r_clear + r_vel + r_acc + r_tilt_smooth + r_descend + r_close
 
         # Penalty for any arm link dipping below table height (approximate contact).
         arm_z = self.robot.data.body_state_w[:, :, 2] - self.scene.env_origins[:, 2].unsqueeze(1)
@@ -606,6 +624,23 @@ class YamManipEnv(DirectRLEnv):
         ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
         if ee_state.shape[-1] >= 13:
             self.prev_ee_lin_vel[env_ids] = ee_state[env_ids, 7:10]
+        # Initialize progress distance (XY) to avoid negative first-step progress.
+        phase = self.phase
+        tgt_idx = torch.clamp(phase, 0, 2)
+        block_pos = torch.stack(
+            [
+                self.blue_block.data.root_pos_w - self.scene.env_origins,
+                self.red_block.data.root_pos_w - self.scene.env_origins,
+                self.yellow_block.data.root_pos_w - self.scene.env_origins,
+            ],
+            dim=1,
+        )
+        env_ids_all = torch.arange(self.num_envs, device=self.device)
+        tgt_block_pos = block_pos[env_ids_all, tgt_idx]
+        grasp_pos_w, _ = self._ee_grasp_pos_w()
+        grasp_pos = grasp_pos_w - self.scene.env_origins
+        xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
+        self.prev_wp_dist[env_ids] = xy_block[env_ids].detach()
         self._debug_print_robot_state()
 
     def _resolve_robot_entities(self) -> None:

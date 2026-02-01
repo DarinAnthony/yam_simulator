@@ -124,8 +124,13 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     ee_acc_w: float = 0.0004
     clearance_w: float = 0.2
     clearance_z: float = 0.04
-    table_contact_w: float = 2.0
-    table_clearance: float = 0.0
+    table_contact_w: float = 0.3
+    table_clearance: float = 0.03
+    # Descend and close shaping
+    descend_w: float = 0.6
+    descend_k: float = 20.0
+    close_w: float = 0.8
+    close_z_gate: float = 0.02
 
     near_thresh: float = 0.03
     grip_closed_thresh: float = 0.8
