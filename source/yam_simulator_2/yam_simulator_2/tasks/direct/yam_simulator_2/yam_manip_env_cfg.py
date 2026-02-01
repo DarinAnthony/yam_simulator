@@ -125,6 +125,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     debug_nan_checks: bool = True
     debug_nan_max_print: int = 10
     debug_abs_max: float = 1.0e3
+    debug_print_obs: bool = False
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
         command_type="pose",

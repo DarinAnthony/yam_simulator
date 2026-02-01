@@ -131,6 +131,7 @@ class YamManipEnv(DirectRLEnv):
         self._debug_bad_rew = False
         self._debug_bad_tensors = set()
         self._obs_step_counter = 0
+        self._debug_enabled = getattr(self.cfg, "debug_print_obs", False)
 
     def _ensure_pose_buffers(self):
         """Create pose-related buffers if they are missing (e.g., after hot-reload)."""
@@ -314,15 +315,14 @@ class YamManipEnv(DirectRLEnv):
             print(f"[DEBUG] obs magnitude clamp: max_abs={max_abs.item():.3e}")
             obs = torch.clamp(obs, -self.cfg.debug_abs_max, self.cfg.debug_abs_max)
 
-        # Print observations just before returning them to the policy (env0 only to
-        # avoid log spam). This is executed every env step so you can see what the
-        # policy will consume.
-        self._obs_step_counter += 1
-        sample = obs[0].detach().cpu()
-        print(
-            f"[OBS@{self._obs_step_counter}] env0 min={sample.min():.3f} "
-            f"max={sample.max():.3f} first10={sample[:10].tolist()}"
-        )
+        # Optional observation printout for debugging; controlled via cfg.debug_print_obs.
+        if self._debug_enabled:
+            self._obs_step_counter += 1
+            sample = obs[0].detach().cpu()
+            print(
+                f"[OBS@{self._obs_step_counter}] env0 min={sample.min():.3f} "
+                f"max={sample.max():.3f} first10={sample[:10].tolist()}"
+            )
         # Hard check across all envs; stop immediately on any non-finite observation.
         if not torch.isfinite(obs).all():
             bad_env = (~torch.isfinite(obs)).any(dim=1).nonzero(as_tuple=False).squeeze(-1)
