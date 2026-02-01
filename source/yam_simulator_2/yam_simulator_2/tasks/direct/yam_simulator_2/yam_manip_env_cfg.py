@@ -83,8 +83,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     # Actions: [dx, dy, dz, gripper]
     ee_delta_scale: float = 0.005
     ee_pos_limit: float = 0.005
-    gripper_open: float = 0.0
-    gripper_closed: float = -0.0475
+    gripper_open: float = -0.0475
+    gripper_closed: float = 0.0
     home_joint_pos: list[float] = [
         -0.003242542153047978,
         0.5556191348134583,
@@ -93,7 +93,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
         0.0005722133211261138,
         0.02193484397650103,
     ]
-    gripper_site_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    gripper_site_offset: tuple[float, float, float] = (0.0, 0.0, -0.08)
 
     # Reward/threshold parameters
     reach_k: float = 10.0
