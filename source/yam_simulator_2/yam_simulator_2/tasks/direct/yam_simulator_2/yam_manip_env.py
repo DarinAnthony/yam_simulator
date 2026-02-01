@@ -160,6 +160,9 @@ class YamManipEnv(DirectRLEnv):
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
         self.camera = Camera(self.cfg.camera_cfg)
+        # Some Isaac Lab builds expect sensors to carry their own timestamp.
+        if not hasattr(self.camera, "_timestamp"):
+            self.camera._timestamp = 0.0
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
