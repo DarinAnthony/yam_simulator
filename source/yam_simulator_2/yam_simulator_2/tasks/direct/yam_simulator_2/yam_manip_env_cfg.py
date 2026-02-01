@@ -21,11 +21,12 @@ from ....assets import YAM_CFG
 
 INCH = 0.0254
 TABLE_HEIGHT = 0.75
-# Table: 23.9 in × 59.8 in → 0.60706 m × 1.51892 m
-TABLE_SIZE = (1.51892, 0.60706, 0.05)
-# Robot base offset: 35.5 in from left edge (facing robot) on the long side → 0.90170 m
-# Left edge is at -TABLE_SIZE[0]/2, so base x = -0.75946 + 0.90170 = 0.14224 m
-ROBOT_BASE_X = 0.14224
+# Table: 23.9 in × 59.8 in → 0.60706 m × 1.51892 m (swapped X/Y)
+TABLE_SIZE = (0.60706, 1.51892, 0.05)
+# Robot base placement: 1.5 in (0.0381 m) from the "top" edge (Y+), facing -X.
+# Top edge Y = +TABLE_SIZE[1]/2 = +0.75946 → base y = 0.75946 - 0.03810 = 0.72136
+ROBOT_BASE_X = 0.0
+ROBOT_BASE_Y = 0.72136
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
     (0.30, 0.00, TABLE_HEIGHT + INCH / 2.0),
@@ -165,7 +166,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
 
     # robot(s)
     robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    robot_cfg.init_state.pos = (ROBOT_BASE_X, 0.0, TABLE_HEIGHT)
+    robot_cfg.init_state.pos = (ROBOT_BASE_X, ROBOT_BASE_Y, TABLE_HEIGHT)
 
     table_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Table",
@@ -188,22 +189,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    wall_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Wall",
-        spawn=CuboidCfg(
-            size=WALL_SIZE,
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 1.0)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=WALL_POS,
-            rot=(1.0, 0.0, 0.0, 0.0),
-        ),
-    )
+    wall_cfg: RigidObjectCfg | None = None
 
     dropoff_red_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/DropoffRed",

@@ -148,7 +148,6 @@ class YamManipEnv(DirectRLEnv):
 
         self.robot = Articulation(self.cfg.robot_cfg)
         self.table = RigidObject(self.cfg.table_cfg)
-        self.wall = RigidObject(self.cfg.wall_cfg)
         self.dropoff_red = RigidObject(self.cfg.dropoff_red_cfg)
         self.dropoff_blue = RigidObject(self.cfg.dropoff_blue_cfg)
         self.dropoff_yellow = RigidObject(self.cfg.dropoff_yellow_cfg)
@@ -164,7 +163,6 @@ class YamManipEnv(DirectRLEnv):
 
         self.scene.articulations["robot"] = self.robot
         self.scene.rigid_objects["table"] = self.table
-        self.scene.rigid_objects["wall"] = self.wall
         self.scene.rigid_objects["dropoff_red"] = self.dropoff_red
         self.scene.rigid_objects["dropoff_blue"] = self.dropoff_blue
         self.scene.rigid_objects["dropoff_yellow"] = self.dropoff_yellow
