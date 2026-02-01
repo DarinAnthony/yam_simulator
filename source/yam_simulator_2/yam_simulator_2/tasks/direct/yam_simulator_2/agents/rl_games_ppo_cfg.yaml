@@ -44,7 +44,7 @@ params:
     multi_gpu: False
 
     ppo: True
-    mixed_precision: True         # highly recommended at 8192 envs
+    mixed_precision: False        # disable AMP to avoid NaN std during policy sampling
     normalize_input: True
     normalize_value: True
     normalize_advantage: True

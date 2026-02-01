@@ -297,6 +297,12 @@ class YamManipEnv(DirectRLEnv):
             drop_b,
             drop_y,
         )
+        # Clamp to avoid huge magnitudes propagating into the policy (helps
+        # prevent NaNs in logstd/std during early random exploration).
+        max_abs = torch.max(torch.abs(obs))
+        if max_abs > self.cfg.debug_abs_max:
+            print(f"[DEBUG] obs magnitude clamp: max_abs={max_abs.item():.3e}")
+            obs = torch.clamp(obs, -self.cfg.debug_abs_max, self.cfg.debug_abs_max)
         self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
 
