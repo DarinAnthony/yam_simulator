@@ -504,6 +504,35 @@ class YamManipEnv(DirectRLEnv):
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
 
+    def _wrap_to_pi(self, a: torch.Tensor) -> torch.Tensor:
+        return (a + torch.pi) % (2 * torch.pi) - torch.pi
+
+    def _quat_to_yaw(self, q: torch.Tensor) -> torch.Tensor:
+        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+        t0 = 2.0 * (w * z + x * y)
+        t1 = 1.0 - 2.0 * (y * y + z * z)
+        return torch.atan2(t0, t1)
+
+    def _quat_from_angle_axis(self, angle: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
+        half = 0.5 * angle
+        s = torch.sin(half).unsqueeze(-1)
+        qw = torch.cos(half).unsqueeze(-1)
+        qxyz = axis * s
+        return torch.cat([qw, qxyz], dim=-1)
+
+    def _quat_mul(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+        w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+        w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+        return torch.stack(
+            [
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            ],
+            dim=-1,
+        )
+
     def _ee_grasp_pos_w(self) -> tuple[torch.Tensor, torch.Tensor]:
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
         ee_pos_w = ee_pose_w[:, 0:3]
