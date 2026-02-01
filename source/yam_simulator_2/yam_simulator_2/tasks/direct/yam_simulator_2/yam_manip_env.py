@@ -340,7 +340,11 @@ class YamManipEnv(DirectRLEnv):
     def _get_rewards(self) -> torch.Tensor:
         self._resolve_robot_entities()
 
+        # -------------------------
+        # Target selection by phase
+        # -------------------------
         phase = self.phase
+        active = phase < 3
         tgt_idx = torch.clamp(phase, 0, 2)
 
         block_pos = torch.stack(
@@ -364,43 +368,97 @@ class YamManipEnv(DirectRLEnv):
         tgt_block_pos = block_pos[env_ids, tgt_idx]
         tgt_goal_pos = goal_pos[env_ids, tgt_idx]
 
+        # EE grasp point (the one you already use)
         grasp_pos_w, _ = self._ee_grasp_pos_w()
         grasp_pos = grasp_pos_w - self.scene.env_origins
 
-        grip_t = self._grip_close_t()
+        grip_t = self._grip_close_t()  # 0=open, 1=closed (from joint positions)
+
+        # Geometry constants
         table_top_z = self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
-        block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0
+        block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0  # all same size
+        block_rest_center_z = table_top_z + block_half_z
 
-        self._debug_check_tensor("actions_xyz", self.actions[:, 0:3])
-        self._debug_check_tensor("tgt_block_pos", tgt_block_pos)
-        self._debug_check_tensor("tgt_goal_pos", tgt_goal_pos)
-        self._debug_check_tensor("grasp_pos", grasp_pos)
-        self._debug_check_tensor("grip_t_rew", grip_t)
+        # -------------------------
+        # Distances and soft gates
+        # -------------------------
+        xy = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)   # EE to block XY
+        z = grasp_pos[:, 2]
+        z_block = tgt_block_pos[:, 2]
 
-        base_reward, placed = compute_reward_core(
-            phase=phase,
-            actions_xyz=self.actions[:, 0:3],
-            tgt_block_pos=tgt_block_pos,
-            tgt_goal_pos=tgt_goal_pos,
-            grasp_pos=grasp_pos,
-            table_top_z=float(table_top_z),
-            block_half_z=float(block_half_z),
-            grip_t=grip_t,
-            grip_closed_thresh=float(self.cfg.grip_closed_thresh),
-            grip_open_thresh=float(self.cfg.grip_open_thresh),
-            near_thresh=float(self.cfg.near_thresh),
-            lift_height=float(self.cfg.lift_height),
-            goal_xy_thresh=float(self.cfg.goal_xy_thresh),
-            place_z_thresh=float(self.cfg.place_z_thresh),
-            reach_k=float(self.cfg.reach_k),
-            goal_k=float(self.cfg.goal_k),
-            reach_w=float(self.cfg.reach_w),
-            grasp_w=float(self.cfg.grasp_w),
-            lift_w=float(self.cfg.lift_w),
-            carry_w=float(self.cfg.carry_w),
-            step_penalty_w=float(self.cfg.step_penalty_w),
-        )
-        self._debug_check_tensor("reward_base", base_reward, "_debug_bad_rew")
+        # Two key heights relative to the block center
+        z_hover = z_block + float(self.cfg.hover_height)
+        z_pick  = z_block + float(self.cfg.pick_z_offset)
+
+        # Soft "aligned in XY" gate: ~1 when close, ~0 when far
+        # (Use a slightly larger radius than near_thresh so it’s reachable early)
+        align_r = 0.08
+        k_align = 20.0
+        g_align = torch.sigmoid(k_align * (align_r - xy))
+
+        # Soft "at pick height" gate: ~1 when near z_pick
+        k_z = 25.0
+        z_gate_r = 0.03
+        g_zpick = torch.sigmoid(k_z * (z_gate_r - torch.abs(z - z_pick)))
+
+        # -------------------------
+        # Stage 1-2: Pose shaping
+        # -------------------------
+        # Encourage XY alignment strongly, and encourage Z to be at hover when far,
+        # then transition to pick height when aligned.
+        k_xy = 15.0
+        r_xy = torch.exp(-k_xy * xy)
+
+        r_z_hover = torch.exp(-k_z * torch.abs(z - z_hover))
+        r_z_pick  = torch.exp(-k_z * torch.abs(z - z_pick))
+
+        # Blend: if not aligned -> prefer hover, if aligned -> prefer pick
+        r_z = (1.0 - g_align) * r_z_hover + g_align * r_z_pick
+
+        r_pose = r_xy * r_z
+
+        # Progress term (only reward improvement; never penalize exploration)
+        # Reuse your buffer prev_wp_dist as "previous xy"
+        delta_xy = (self.prev_wp_dist - xy)
+        r_prog = torch.clamp(delta_xy, min=0.0)
+        self.prev_wp_dist = xy.detach()
+
+        # -------------------------
+        # Stage 3: Gripper timing shaping
+        # -------------------------
+        # Desired gripper state:
+        # - open when not aligned
+        # - closed when aligned AND near pick height
+        grip_target = (g_align * g_zpick)  # in [0,1]
+        r_grip = 1.0 - (grip_t - grip_target) ** 2  # in [0,1], max when matching target
+
+        # -------------------------
+        # Stage 4: Lift / Carry / Place
+        # -------------------------
+        # "Lifted" proxy based on block height above rest position on the table.
+        block_clear = (tgt_block_pos[:, 2] - block_rest_center_z)
+        lifted = block_clear > (0.5 * float(self.cfg.lift_height))  # easier than full lift_height early
+
+        # Lift reward (bounded [0,1])
+        r_lift = torch.clamp(block_clear / float(self.cfg.lift_height), 0.0, 1.0) * lifted.to(torch.float32)
+
+        # Carry toward goal (bounded)
+        d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
+        k_goal = 10.0
+        r_carry = torch.exp(-k_goal * d_goal_xy) * lifted.to(torch.float32)
+
+        # Place shaping: encourage lowering near goal
+        place_z = block_rest_center_z + float(self.cfg.place_z_offset)
+        r_place_z = torch.exp(-k_z * torch.abs(tgt_block_pos[:, 2] - place_z)) * lifted.to(torch.float32)
+
+        near_goal = d_goal_xy < (2.0 * float(self.cfg.goal_xy_thresh))
+        r_place = (0.5 * r_carry + 0.5 * r_place_z) * near_goal.to(torch.float32)
+
+        # Placement success + phase advance (keep your logic)
+        grip_open = grip_t < float(self.cfg.grip_open_thresh)
+        at_goal_xy = d_goal_xy < float(self.cfg.goal_xy_thresh)
+        near_table = torch.abs(tgt_block_pos[:, 2] - block_rest_center_z) < float(self.cfg.place_z_thresh)
+        placed = at_goal_xy & near_table & grip_open & active
 
         bonus = torch.zeros((self.num_envs,), device=self.device)
         newly_placed = placed.nonzero(as_tuple=False).squeeze(-1)
@@ -410,113 +468,58 @@ class YamManipEnv(DirectRLEnv):
             self.phase[newly_placed] += 1
             bonus[newly_placed] = float(self.cfg.place_bonus)
 
-        reward = base_reward + bonus
-        # Action smoothness penalty (encourage small deltas between steps).
-        actions_xyz = self.actions[:, 0:3]
-        prev_xyz = self.prev_actions[:, 0:3]
-        r_smooth = -float(self.cfg.smooth_w) * torch.sum((actions_xyz - prev_xyz) ** 2, dim=-1)
+        # -------------------------
+        # Regularization penalties
+        # -------------------------
+        # Small action penalty (position deltas only)
+        act_pen = float(self.cfg.step_penalty_w) * torch.sum(self.actions[:, 0:3] ** 2, dim=-1)
 
-        # Encourage keeping gripper open until close to the target block.
-        d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
-        open_mask = d_reach > float(self.cfg.near_thresh)
-        r_open = float(self.cfg.open_until_contact_w) * torch.clamp(1.0 - grip_t, 0.0, 1.0) * open_mask
-        reward = reward + r_smooth + r_open
+        # Smoothness penalty
+        r_smooth = -float(self.cfg.smooth_w) * torch.sum((self.actions[:, 0:3] - self.prev_actions[:, 0:3]) ** 2, dim=-1)
 
-        # --- Waypoint / smooth pick-place shaping ---
-        active = phase < 3
-        near_thresh = float(self.cfg.near_thresh)
-        lift_height = float(self.cfg.lift_height)
-        grip_closed_thresh = float(self.cfg.grip_closed_thresh)
-
-        grip_closed = grip_t > grip_closed_thresh
-        near = d_reach < near_thresh
-        lifted = (tgt_block_pos[:, 2] - table_top_z) > lift_height
-        grasped = (near & grip_closed) | lifted
-
-        hover_h = float(self.cfg.hover_height)
-        pick_z_off = float(self.cfg.pick_z_offset)
-        place_z_off = float(self.cfg.place_z_offset)
-
-        wp_hover_block = tgt_block_pos.clone()
-        wp_hover_block[:, 2] = tgt_block_pos[:, 2] + hover_h
-        wp_pick_block = tgt_block_pos.clone()
-        wp_pick_block[:, 2] = tgt_block_pos[:, 2] + pick_z_off
-
-        xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
-        gate_block = torch.sigmoid(float(self.cfg.wp_gate_k) * (xy_block - float(self.cfg.wp_gate_xy)))
-        wp_block = wp_pick_block.clone()
-        wp_block[:, 2] = gate_block * wp_hover_block[:, 2] + (1.0 - gate_block) * wp_pick_block[:, 2]
-
-        wp_place = tgt_goal_pos.clone()
-        wp_place[:, 2] = float(table_top_z + block_half_z) + place_z_off
-        wp_hover_goal = wp_place.clone()
-        wp_hover_goal[:, 2] = wp_place[:, 2] + hover_h
-        xy_goal = torch.linalg.norm((grasp_pos - wp_place)[:, 0:2], dim=-1)
-        gate_goal = torch.sigmoid(float(self.cfg.wp_gate_k) * (xy_goal - float(self.cfg.wp_gate_xy)))
-        wp_goal = wp_place.clone()
-        wp_goal[:, 2] = gate_goal * wp_hover_goal[:, 2] + (1.0 - gate_goal) * wp_place[:, 2]
-
-        wp = torch.where(grasped.unsqueeze(-1), wp_goal, wp_block)
-        dist_wp = torch.linalg.norm(grasp_pos - wp, dim=-1)
-
-        r_wp_pick = float(self.cfg.wp_pick_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * (~grasped) * active
-        r_wp_place = float(self.cfg.wp_place_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * grasped * active
-
-        # Progress shaping on XY only to avoid moving-Z-target trap.
-        dist_prog = torch.where(grasped, xy_goal, xy_block)
-        r_prog = float(self.cfg.wp_progress_w) * (self.prev_wp_dist - dist_prog) * active
-        self.prev_wp_dist = dist_prog.detach()
-
-        # Descend reward once aligned in XY.
-        aligned_xy = xy_block < float(self.cfg.wp_gate_xy)
-        z_pick = tgt_block_pos[:, 2] + pick_z_off
-        z_err_pick = torch.abs(grasp_pos[:, 2] - z_pick)
-        r_descend = (
-            float(self.cfg.descend_w)
-            * (1.0 - torch.tanh(float(self.cfg.descend_k) * z_err_pick))
-            * aligned_xy
-            * (~grasped)
-            * active
-        )
-
-        # Encourage closing when aligned and near pick height.
-        close_zone = aligned_xy & (z_err_pick < float(self.cfg.close_z_gate)) & (~lifted) & active
-        r_close = float(self.cfg.close_w) * grip_t * close_zone.to(torch.float32)
-
-        clearance = torch.clamp((tgt_block_pos[:, 2] + float(self.cfg.clearance_z)) - grasp_pos[:, 2], min=0.0)
-        far_xy = xy_block > float(self.cfg.wp_gate_xy)
-        r_clear = -float(self.cfg.clearance_w) * clearance * far_xy * (~grasped) * active
-
-        # EE velocity / acceleration penalties (small)
-        ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
+        # Optional: tiny EE velocity penalty (keep if you want)
         r_vel = torch.zeros((self.num_envs,), device=self.device)
-        r_acc = torch.zeros((self.num_envs,), device=self.device)
+        ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
         if ee_state.shape[-1] >= 13:
             ee_lin_vel = ee_state[:, 7:10]
-            r_vel = -float(self.cfg.ee_vel_w) * torch.sum(ee_lin_vel * ee_lin_vel, dim=-1) * active
-            acc = (ee_lin_vel - self.prev_ee_lin_vel) / float(self.physics_dt)
-            r_acc = -float(self.cfg.ee_acc_w) * torch.sum(acc * acc, dim=-1) * active
-            self.prev_ee_lin_vel = ee_lin_vel.detach()
+            r_vel = -float(self.cfg.ee_vel_w) * torch.sum(ee_lin_vel * ee_lin_vel, dim=-1)
 
-        # Tilt smoothness
-        d_tilt = self.actions[:, 3:5] - self.prev_actions[:, 3:5]
-        r_tilt_smooth = -float(self.cfg.tilt_smooth_w) * torch.sum(d_tilt * d_tilt, dim=-1) * active
+        # -------------------------
+        # Combine
+        # -------------------------
+        # Weights (start conservative; you can tune later)
+        w_pose   = 2.0
+        w_prog   = 1.0
+        w_grip   = 0.5
+        w_lift   = 2.0
+        w_carry  = 2.0
+        w_place  = 1.0
 
-        reward = reward + r_wp_pick + r_wp_place + r_prog + r_clear + r_vel + r_acc + r_tilt_smooth + r_descend + r_close
+        reward = (
+            active.to(torch.float32)
+            * (
+                w_pose  * r_pose
+                + w_prog * r_prog
+                + w_grip * r_grip
+                + w_lift * r_lift
+                + w_carry * r_carry
+                + w_place * r_place
+                + r_smooth
+                + r_vel
+                - act_pen
+            )
+            + bonus
+        )
 
-        # Penalty for any arm link dipping below table height (approximate contact).
-        arm_z = self.robot.data.body_state_w[:, :, 2] - self.scene.env_origins[:, 2].unsqueeze(1)
-        min_arm_z = arm_z.min(dim=1).values
-        table_top = table_top_z  # already in world frame
-        contact_depth = torch.clamp(table_top - float(self.cfg.table_clearance) - min_arm_z, min=0.0)
-        r_table_contact = -float(self.cfg.table_contact_w) * contact_depth
-        reward = reward + r_table_contact
         if not torch.isfinite(reward).all():
             bad_env = (~torch.isfinite(reward)).nonzero(as_tuple=False).squeeze(-1)
             e = int(bad_env[0].item())
             print(f"[BAD REW] env={e} rew={float(reward[e].item())}")
             raise RuntimeError("Non-finite reward")
+
         return reward
+
+
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._resolve_robot_entities()
