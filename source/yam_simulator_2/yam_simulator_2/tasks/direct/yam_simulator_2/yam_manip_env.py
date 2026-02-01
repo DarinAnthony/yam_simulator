@@ -9,6 +9,7 @@ import torch
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
+from isaaclab.sensors import Camera
 from isaaclab.controllers import DifferentialIKController
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
@@ -158,6 +159,7 @@ class YamManipEnv(DirectRLEnv):
         self.red_block = RigidObject(self.cfg.red_block_cfg)
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
+        self.camera = Camera(self.cfg.camera_cfg)
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
@@ -174,6 +176,7 @@ class YamManipEnv(DirectRLEnv):
         self.scene.rigid_objects["red_block"] = self.red_block
         self.scene.rigid_objects["blue_block"] = self.blue_block
         self.scene.rigid_objects["yellow_block"] = self.yellow_block
+        self.scene.sensors["camera"] = self.camera
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -632,6 +635,7 @@ class YamManipEnv(DirectRLEnv):
         self.ee_quat_nominal_b[env_ids] = ee_quat_b[env_ids]
         self._ik.reset()
         self._update_site_marker(env_ids=env_ids)
+        self._update_camera_pose(env_ids=env_ids)
         # Initialize EE velocity buffer from current state (if available).
         ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
         if ee_state.shape[-1] >= 13:
@@ -781,3 +785,24 @@ class YamManipEnv(DirectRLEnv):
         marker_state[:, 7:] = 0.0
         self.site_marker.write_root_pose_to_sim(marker_state[:, 0:7], env_ids)
         self.site_marker.write_root_velocity_to_sim(marker_state[:, 7:], env_ids)
+
+    def _update_camera_pose(self, env_ids=None) -> None:
+        if env_ids is None:
+            env_ids = self.robot._ALL_INDICES
+        # midpoint of tips
+        tip_pos_w = self.robot.data.body_state_w[:, self.marker_body_ids[:2], 0:3].mean(dim=1)
+        tip_quat_w = self.robot.data.body_state_w[:, self.marker_body_ids[0], 3:7]
+
+        offset = torch.tensor(self.cfg.camera_offset_pos, device=self.device, dtype=torch.float32)
+        offset = offset.unsqueeze(0).expand(tip_quat_w.shape[0], 3)
+        offset_w = torch_utils.quat_apply(tip_quat_w, offset)
+        cam_pos = tip_pos_w + offset_w
+
+        # pitch down about +X by camera_pitch_deg
+        angle = math.radians(self.cfg.camera_pitch_deg)
+        axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(tip_quat_w.shape[0], 3)
+        q_pitch = self._quat_from_angle_axis(torch.full((tip_quat_w.shape[0],), angle, device=self.device), axis)
+        cam_quat = self._quat_mul(tip_quat_w, q_pitch)
+        cam_quat = cam_quat / torch.linalg.norm(cam_quat, dim=-1, keepdim=True).clamp_min(1e-8)
+
+        self.camera.set_world_poses(cam_pos[env_ids], cam_quat[env_ids], env_ids=env_ids)

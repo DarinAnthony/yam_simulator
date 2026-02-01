@@ -9,6 +9,7 @@ import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.controllers import DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs import DirectRLEnvCfg
@@ -26,8 +27,8 @@ TABLE_SIZE = (0.60706, 1.51892, 0.05)
 # Robot base placement: 35.5 in (0.90170 m) from the left edge when facing -Y.
 # Left edge (facing -Y) lies at Y = +TABLE_SIZE[1]/2 = +0.75946 m.
 # Base Y = 0.75946 - 0.90170 = -0.14224 m
-ROBOT_BASE_X = 0.0
-ROBOT_BASE_Y = -0.14224
+ROBOT_BASE_X = -0.26543
+ROBOT_BASE_Y = 0.14224
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
     (-0.05, -0.22352, TABLE_HEIGHT + INCH / 2.0),
@@ -42,7 +43,7 @@ WALL_X = (TABLE_SIZE[0] / 2.0) + (WALL_THICKNESS / 2.0) + 0.05
 WALL_POS = (WALL_X, 0.0, TABLE_HEIGHT + WALL_HEIGHT / 2.0)
 START_AREA_RADIUS = 0.08
 START_AREA_HEIGHT = 0.01
-START_CENTER = (0.0, -0.22352, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
+START_CENTER = (0.0, 0.4352, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
 BLOCK_CLEARANCE = 0.001
 MIN_BLOCK_SEPARATION = INCH * 1.25
 SITE_MARKER_RADIUS = 0.01
@@ -146,12 +147,28 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     debug_nan_max_print: int = 10
     debug_abs_max: float = 1.0e3
     debug_print_obs: bool = False
+    camera_offset_pos: tuple[float, float, float] = (0.0, 0.02540, 0.11176)
+    camera_pitch_deg: float = -60.0
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
         command_type="pose",
         use_relative_mode=False,
         ik_method="dls",
         ik_params={"lambda_val": 0.05},
+    )
+
+    camera_cfg: CameraCfg = CameraCfg(
+        prim_path="/World/envs/env_.*/Camera",
+        update_period=0.0,
+        data_types=["rgb"],
+        width=640,
+        height=480,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.05, 10.0),
+        ),
     )
 
     # robot(s)
