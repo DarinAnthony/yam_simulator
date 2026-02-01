@@ -39,6 +39,8 @@ START_AREA_HEIGHT = 0.01
 START_CENTER = (0.30, 0.0, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
 BLOCK_CLEARANCE = 0.001
 MIN_BLOCK_SEPARATION = INCH * 1.25
+SITE_MARKER_RADIUS = 0.01
+SITE_MARKER_HEIGHT = 0.04
 DROP_OFF_RADIUS = 0.16
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
@@ -84,6 +86,15 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     ee_pos_limit: float = 0.02
     gripper_open: float = 0.0
     gripper_closed: float = -0.0475
+    home_joint_pos: list[float] = [
+        -0.003242542153047978,
+        0.5556191348134583,
+        0.6071183337148085,
+        -0.09899290455481768,
+        0.0005722133211261138,
+        0.02193484397650103,
+    ]
+    gripper_site_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     robot_entity: SceneEntityCfg = SceneEntityCfg(
         "robot",
@@ -221,6 +232,29 @@ class YamManipEnvCfg(DirectRLEnvCfg):
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.2, 1.0, 0.2),
                 opacity=0.1,
+                roughness=0.6,
+                metallic=0.0,
+            ),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=START_CENTER,
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+    )
+
+    site_marker_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/GripperSiteMarker",
+        spawn=CylinderCfg(
+            radius=SITE_MARKER_RADIUS,
+            height=SITE_MARKER_HEIGHT,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            collision_props=None,
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(1.0, 0.0, 1.0),
+                opacity=0.25,
                 roughness=0.6,
                 metallic=0.0,
             ),

@@ -1,11 +1,8 @@
 params:
   seed: 42
 
-  # environment wrapper clipping
   env:
-    # added to the wrapper
-    clip_observations: 5.0
-    # can make custom wrapper?
+    clip_observations: 10.0
     clip_actions: 1.0
 
   algo:
@@ -14,65 +11,80 @@ params:
   model:
     name: continuous_a2c_logstd
 
-  # doesn't have this fine grained control but made it close
   network:
     name: actor_critic
-    separate: False
+    separate: True
     space:
       continuous:
         mu_activation: None
         sigma_activation: None
-
         mu_init:
           name: default
         sigma_init:
           name: const_initializer
-          val: 0
-        fixed_sigma: True
+          val: -1.5          # tighter initial exploration than dexterous-hand
+        fixed_sigma: False   # learn sigma
     mlp:
-      units: [32, 32]
+      units: [256, 256]
       activation: elu
       d2rl: False
-
       initializer:
         name: default
       regularizer:
         name: None
 
-  load_checkpoint: False # flag which sets whether to load the checkpoint
-  load_path: '' # path to the checkpoint to load
+  load_checkpoint: False
+  load_path: ''
 
   config:
-    name: cartpole_direct
+    name: yam_cube_sort_8192
     env_name: rlgpu
     device: 'cuda:0'
     device_name: 'cuda:0'
     multi_gpu: False
+
     ppo: True
-    mixed_precision: False
+    mixed_precision: True         # highly recommended at 8192 envs
     normalize_input: True
     normalize_value: True
-    num_actors: -1  # configured from the script (based on num_envs)
-    reward_shaper:
-      scale_value: 0.1
     normalize_advantage: True
+    value_bootstrap: True
+
+    num_actors: -1                # set by script from num_envs
+
+    reward_shaper:
+      scale_value: 1.0            # start here; reduce only if rewards are huge
+
     gamma: 0.99
-    tau : 0.95
-    learning_rate: 5e-4
+    tau: 0.95
+
+    learning_rate: 3e-4
     lr_schedule: adaptive
-    kl_threshold: 0.008
-    score_to_win: 20000
-    max_epochs: 150
+    schedule_type: standard
+    kl_threshold: 0.01
+
+    max_epochs: 800               # manipulation usually needs more than 150
     save_best_after: 50
-    save_frequency: 25
+    save_frequency: 50
+    print_stats: True
+
     grad_norm: 1.0
-    entropy_coef: 0.0
     truncate_grads: True
+
+    entropy_coef: 0.005           # helps staged behavior exploration
     e_clip: 0.2
-    horizon_length: 32
-    minibatch_size: 16384
-    mini_epochs: 8
-    critic_coef: 4
     clip_value: True
-    seq_length: 4
+    critic_coef: 2.0
     bounds_loss_coef: 0.0001
+
+    horizon_length: 32            # 8192 * 32 = 262,144 batch
+    minibatch_size: 32768         # 8 minibatches/update
+    mini_epochs: 5                # 40 optimizer steps/update
+
+    # If you are NOT using an RNN, keep seq_length at 1 (or omit it)
+    seq_length: 1
+
+    player:
+      deterministic: True
+      games_num: 100000
+      print_stats: True

@@ -2,15 +2,15 @@
   <compiler angle="radian"/>
 
   <asset>
-    <mesh name="base" content_type="model/stl" file="base.stl"/>
-    <mesh name="link1" content_type="model/stl" file="link1.stl"/>
-    <mesh name="link2" content_type="model/stl" file="link2.stl"/>
-    <mesh name="link3" content_type="model/stl" file="link3.stl"/>
-    <mesh name="link4" content_type="model/stl" file="link4.stl"/>
-    <mesh name="link5" content_type="model/stl" file="link5.stl"/>
-    <mesh name="gripper" content_type="model/stl" file="gripper.stl"/>
-    <mesh name="tip_left" content_type="model/stl" file="tip_left.stl"/>
-    <mesh name="tip_right" content_type="model/stl" file="tip_right.stl"/>
+    <mesh name="base" content_type="model/stl" file="assets/base.stl"/>
+    <mesh name="link1" content_type="model/stl" file="assets/link1.stl"/>
+    <mesh name="link2" content_type="model/stl" file="assets/link2.stl"/>
+    <mesh name="link3" content_type="model/stl" file="assets/link3.stl"/>
+    <mesh name="link4" content_type="model/stl" file="assets/link4.stl"/>
+    <mesh name="link5" content_type="model/stl" file="assets/link5.stl"/>
+    <mesh name="gripper" content_type="model/stl" file="assets/gripper.stl"/>
+    <mesh name="tip_left" content_type="model/stl" file="assets/tip_left.stl"/>
+    <mesh name="tip_right" content_type="model/stl" file="assets/tip_right.stl"/>
   </asset>
 
   <worldbody>

@@ -13,6 +13,7 @@ from isaaclab.controllers import DifferentialIKController
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.math import subtract_frame_transforms
+import isaacsim.core.utils.torch as torch_utils
 
 from .yam_manip_env_cfg import YamManipEnvCfg
 
@@ -38,6 +39,7 @@ class YamManipEnv(DirectRLEnv):
         self.dropoff_blue = RigidObject(self.cfg.dropoff_blue_cfg)
         self.dropoff_yellow = RigidObject(self.cfg.dropoff_yellow_cfg)
         self.start_area = RigidObject(self.cfg.start_area_cfg) if self.cfg.use_start_area_radius else None
+        self.site_marker = RigidObject(self.cfg.site_marker_cfg)
         self.red_block = RigidObject(self.cfg.red_block_cfg)
         self.blue_block = RigidObject(self.cfg.blue_block_cfg)
         self.yellow_block = RigidObject(self.cfg.yellow_block_cfg)
@@ -54,6 +56,7 @@ class YamManipEnv(DirectRLEnv):
         self.scene.rigid_objects["dropoff_yellow"] = self.dropoff_yellow
         if self.start_area is not None:
             self.scene.rigid_objects["start_area"] = self.start_area
+        self.scene.rigid_objects["site_marker"] = self.site_marker
         self.scene.rigid_objects["red_block"] = self.red_block
         self.scene.rigid_objects["blue_block"] = self.blue_block
         self.scene.rigid_objects["yellow_block"] = self.yellow_block
@@ -100,6 +103,7 @@ class YamManipEnv(DirectRLEnv):
         grip_q_des = torch.stack([finger_q, finger_q], dim=1)
         self.robot.set_joint_position_target(grip_q_des, joint_ids=self.grip_joint_ids)
         self.robot.write_data_to_sim()
+        self._update_site_marker()
 
     def _get_observations(self) -> dict:
         red_pos = self.red_block.data.root_pos_w - self.scene.env_origins
@@ -130,6 +134,11 @@ class YamManipEnv(DirectRLEnv):
 
         joint_pos = self.robot.data.default_joint_pos[env_ids]
         joint_vel = self.robot.data.default_joint_vel[env_ids]
+        if len(self.cfg.home_joint_pos) >= len(self.arm_joint_ids):
+            joint_pos[:, self.arm_joint_ids] = torch.tensor(
+                self.cfg.home_joint_pos[: len(self.arm_joint_ids)], device=self.device
+            ).unsqueeze(0)
+        joint_pos[:, self.grip_joint_ids] = float(self.cfg.gripper_open)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
         num_envs = env_ids.shape[0]
@@ -185,6 +194,7 @@ class YamManipEnv(DirectRLEnv):
         )
         self.ee_pos_target_b[env_ids] = ee_pos_b[env_ids]
         self.ee_quat_target_b[env_ids] = ee_quat_b[env_ids]
+        self._update_site_marker(env_ids=env_ids)
 
     def _resolve_robot_entities(self) -> None:
         if self._entities_resolved:
@@ -204,3 +214,20 @@ class YamManipEnv(DirectRLEnv):
         self.grip_joint_ids = torch.tensor(grip_ids, device=self.device, dtype=torch.long)
         self.ee_body_id = self.cfg.robot_entity.body_ids[0]
         self._entities_resolved = True
+
+    def _update_site_marker(self, env_ids=None) -> None:
+        if env_ids is None:
+            env_ids = self.robot._ALL_INDICES
+        ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
+        ee_pos_w = ee_pose_w[:, 0:3]
+        ee_quat_w = ee_pose_w[:, 3:7]
+        offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
+        offset_w = torch_utils.quat_apply(ee_quat_w, offset)
+        marker_pos = ee_pos_w + offset_w
+        marker_quat = ee_quat_w
+        marker_state = self.site_marker.data.default_root_state[env_ids].clone()
+        marker_state[:, 0:3] = marker_pos[env_ids]
+        marker_state[:, 3:7] = marker_quat[env_ids]
+        marker_state[:, 7:] = 0.0
+        self.site_marker.write_root_pose_to_sim(marker_state[:, 0:7], env_ids)
+        self.site_marker.write_root_velocity_to_sim(marker_state[:, 7:], env_ids)
