@@ -16,7 +16,7 @@
         <mesh filename="assets/base.stl"/>
       </geometry>
       <material name="base_material">
-        <color rgba="0.317647 0.121569 0.498039 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -40,7 +40,7 @@
         <mesh filename="assets/link1.stl"/>
       </geometry>
       <material name="link1_material">
-        <color rgba="0.72549 0.45098 0.317647 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -64,7 +64,7 @@
         <mesh filename="assets/link2.stl"/>
       </geometry>
       <material name="link2_material">
-        <color rgba="0 0.4 0.6 1"/>
+        <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
@@ -88,7 +88,7 @@
         <mesh filename="assets/link3.stl"/>
       </geometry>
       <material name="link3_material">
-        <color rgba="0.552941 0.580392 0.203922 1"/>
+        <color rgba="1 1 1 1"/>
       </material>
     </visual>
     <collision>
@@ -112,7 +112,7 @@
         <mesh filename="assets/link4.stl"/>
       </geometry>
       <material name="link4_material">
-        <color rgba="0.545098 0.52549 0.419608 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -136,7 +136,7 @@
         <mesh filename="assets/link5.stl"/>
       </geometry>
       <material name="link5_material">
-        <color rgba="0.827451 0.623529 0.784314 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -160,7 +160,7 @@
         <mesh filename="assets/gripper.stl"/>
       </geometry>
       <material name="gripper_material">
-        <color rgba="0.109804 0.286275 0.0117647 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -184,7 +184,7 @@
         <mesh filename="assets/tip_left.stl"/>
       </geometry>
       <material name="tip_left_material">
-        <color rgba="0.596078 0.788235 0.921569 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>
@@ -216,7 +216,7 @@
         <mesh filename="assets/tip_right.stl"/>
       </geometry>
       <material name="tip_right_material">
-        <color rgba="0.596078 0.788235 0.921569 1"/>
+        <color rgba="0 0 0 1"/>
       </material>
     </visual>
     <collision>

@@ -14,7 +14,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
-from isaaclab.sim.spawners.shapes import CuboidCfg, CylinderCfg
+from isaaclab.sim.spawners.shapes import CuboidCfg, CylinderCfg, SphereCfg
 from isaaclab.utils import configclass
 
 from ....assets import YAM_CFG
@@ -40,7 +40,6 @@ START_CENTER = (0.30, 0.0, TABLE_HEIGHT + START_AREA_HEIGHT / 2.0)
 BLOCK_CLEARANCE = 0.001
 MIN_BLOCK_SEPARATION = INCH * 1.25
 SITE_MARKER_RADIUS = 0.01
-SITE_MARKER_HEIGHT = 0.04
 DROP_OFF_RADIUS = 0.16
 DROP_OFF_HEIGHT = 0.02
 DROP_OFF_POSITIONS = (
@@ -67,9 +66,9 @@ DROP_OFF_RADIUS_VIS = 0.05
 class YamManipEnvCfg(DirectRLEnvCfg):
     # env
     decimation = 2
-    episode_length_s = 10.0
+    episode_length_s = 60.0
     action_space = 4
-    observation_space = 9
+    observation_space = 40
     state_space = 0
 
     # simulation
@@ -82,8 +81,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     min_block_separation: float = MIN_BLOCK_SEPARATION
 
     # Actions: [dx, dy, dz, gripper]
-    ee_delta_scale: float = 0.02
-    ee_pos_limit: float = 0.02
+    ee_delta_scale: float = 0.005
+    ee_pos_limit: float = 0.005
     gripper_open: float = 0.0
     gripper_closed: float = -0.0475
     home_joint_pos: list[float] = [
@@ -96,11 +95,29 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     ]
     gripper_site_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+    # Reward/threshold parameters
+    reach_k: float = 10.0
+    goal_k: float = 10.0
+    reach_w: float = 1.0
+    grasp_w: float = 0.5
+    lift_w: float = 2.0
+    carry_w: float = 2.0
+    place_bonus: float = 10.0
+    step_penalty_w: float = 0.01
+
+    near_thresh: float = 0.03
+    grip_closed_thresh: float = 0.8
+    grip_open_thresh: float = 0.2
+    lift_height: float = 0.05
+    goal_xy_thresh: float = 0.05
+    place_z_thresh: float = 0.02
+
     robot_entity: SceneEntityCfg = SceneEntityCfg(
         "robot",
         joint_names=["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7", "joint8"],
         body_names=["gripper"],
     )
+    marker_body_names: list[str] = ["tip_left", "tip_right"]
 
     diff_ik_cfg: DifferentialIKControllerCfg = DifferentialIKControllerCfg(
         command_type="position",
@@ -244,9 +261,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
 
     site_marker_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/GripperSiteMarker",
-        spawn=CylinderCfg(
+        spawn=SphereCfg(
             radius=SITE_MARKER_RADIUS,
-            height=SITE_MARKER_HEIGHT,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,

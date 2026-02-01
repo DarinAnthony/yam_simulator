@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
@@ -28,6 +29,8 @@ class YamManipEnv(DirectRLEnv):
         self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
         self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
         self._entities_resolved = False
+        self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
+        self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
 
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
@@ -106,19 +109,142 @@ class YamManipEnv(DirectRLEnv):
         self._update_site_marker()
 
     def _get_observations(self) -> dict:
+        self._resolve_robot_entities()
+
+        root_pose_w = self.robot.data.root_state_w[:, 0:7]
+        ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
+        ee_pos_b, _ = subtract_frame_transforms(
+            root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+        )
+
+        grip_t = self._grip_close_t().unsqueeze(-1)
+
         red_pos = self.red_block.data.root_pos_w - self.scene.env_origins
         blue_pos = self.blue_block.data.root_pos_w - self.scene.env_origins
         yellow_pos = self.yellow_block.data.root_pos_w - self.scene.env_origins
-        observations = {"policy": torch.cat((red_pos, blue_pos, yellow_pos), dim=-1)}
-        return observations
+
+        red_vel = self.red_block.data.root_lin_vel_w
+        blue_vel = self.blue_block.data.root_lin_vel_w
+        yellow_vel = self.yellow_block.data.root_lin_vel_w
+
+        drop_r = self.dropoff_red.data.root_pos_w - self.scene.env_origins
+        drop_b = self.dropoff_blue.data.root_pos_w - self.scene.env_origins
+        drop_y = self.dropoff_yellow.data.root_pos_w - self.scene.env_origins
+
+        phase_clamped = torch.clamp(self.phase, 0, 2)
+        phase_oh = F.one_hot(phase_clamped, num_classes=3).float()
+        sorted_f = self.sorted_mask.float()
+
+        obs = torch.cat(
+            [
+                phase_oh,
+                sorted_f,
+                ee_pos_b,
+                self.ee_pos_target_b,
+                grip_t,
+                red_pos,
+                blue_pos,
+                yellow_pos,
+                red_vel,
+                blue_vel,
+                yellow_vel,
+                drop_r,
+                drop_b,
+                drop_y,
+            ],
+            dim=-1,
+        )
+        return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
-        # Empty reward for now (visualization-only task).
-        return torch.zeros((self.num_envs,), device=self.device)
+        self._resolve_robot_entities()
+
+        table_top_z = (
+            self.cfg.table_cfg.init_state.pos[2] + self.cfg.table_cfg.spawn.size[2] / 2.0
+        )
+        block_half_z = self.cfg.red_block_cfg.spawn.size[2] / 2.0
+
+        phase = self.phase
+        active = phase < 3
+        tgt_idx = torch.clamp(phase, 0, 2)
+
+        block_pos = torch.stack(
+            [
+                self.blue_block.data.root_pos_w - self.scene.env_origins,
+                self.red_block.data.root_pos_w - self.scene.env_origins,
+                self.yellow_block.data.root_pos_w - self.scene.env_origins,
+            ],
+            dim=1,
+        )
+        goal_pos = torch.stack(
+            [
+                self.dropoff_blue.data.root_pos_w - self.scene.env_origins,
+                self.dropoff_red.data.root_pos_w - self.scene.env_origins,
+                self.dropoff_yellow.data.root_pos_w - self.scene.env_origins,
+            ],
+            dim=1,
+        )
+
+        env_ids = torch.arange(self.num_envs, device=self.device)
+        tgt_block_pos = block_pos[env_ids, tgt_idx]
+        tgt_goal_pos = goal_pos[env_ids, tgt_idx]
+
+        grasp_pos_w, _ = self._ee_grasp_pos_w()
+        grasp_pos = grasp_pos_w - self.scene.env_origins
+
+        d_reach = torch.linalg.norm(grasp_pos - tgt_block_pos, dim=-1)
+        d_goal_xy = torch.linalg.norm((tgt_block_pos - tgt_goal_pos)[:, 0:2], dim=-1)
+
+        grip_t = self._grip_close_t()
+        grip_closed = grip_t > float(self.cfg.grip_closed_thresh)
+        grip_open = grip_t < float(self.cfg.grip_open_thresh)
+
+        near = d_reach < float(self.cfg.near_thresh)
+        lifted = (tgt_block_pos[:, 2] - table_top_z) > float(self.cfg.lift_height)
+        at_goal_xy = d_goal_xy < float(self.cfg.goal_xy_thresh)
+        near_table = torch.abs(tgt_block_pos[:, 2] - (table_top_z + block_half_z)) < float(
+            self.cfg.place_z_thresh
+        )
+
+        grasped = (near & grip_closed) | lifted
+
+        r_reach = (1.0 - torch.tanh(float(self.cfg.reach_k) * d_reach)) * (~grasped) * active
+        r_grasp = (near.float() * grip_t) * (~lifted) * active
+        r_lift = torch.clamp(
+            (tgt_block_pos[:, 2] - table_top_z) / float(self.cfg.lift_height), 0.0, 1.0
+        ) * grasped * active
+        r_carry = (1.0 - torch.tanh(float(self.cfg.goal_k) * d_goal_xy)) * grasped * active
+
+        placed = at_goal_xy & near_table & grip_open & active
+
+        bonus = torch.zeros((self.num_envs,), device=self.device)
+        newly_placed = placed.nonzero(as_tuple=False).squeeze(-1)
+        if newly_placed.numel() > 0:
+            idxs = tgt_idx[newly_placed]
+            self.sorted_mask[newly_placed, idxs] = True
+            self.phase[newly_placed] += 1
+            bonus[newly_placed] = float(self.cfg.place_bonus)
+
+        act_pen = float(self.cfg.step_penalty_w) * torch.sum(self.actions[:, 0:3] ** 2, dim=-1)
+
+        reward = (
+            float(self.cfg.reach_w) * r_reach
+            + float(self.cfg.grasp_w) * r_grasp
+            + float(self.cfg.lift_w) * r_lift
+            + float(self.cfg.carry_w) * r_carry
+            + bonus
+            - act_pen
+        )
+        return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self._resolve_robot_entities()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        return time_out, time_out
+        success = self.phase >= 3
+        if torch.any(success):
+            success_ids = success.nonzero(as_tuple=False).squeeze(-1)
+            self._set_robot_home(success_ids)
+        return success, time_out
 
     def _reset_idx(self, env_ids):
         if env_ids is None:
@@ -126,20 +252,14 @@ class YamManipEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         self._resolve_robot_entities()
+        self.phase[env_ids] = 0
+        self.sorted_mask[env_ids] = False
 
         default_root_state = self.robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
         self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-
-        joint_pos = self.robot.data.default_joint_pos[env_ids]
-        joint_vel = self.robot.data.default_joint_vel[env_ids]
-        if len(self.cfg.home_joint_pos) >= len(self.arm_joint_ids):
-            joint_pos[:, self.arm_joint_ids] = torch.tensor(
-                self.cfg.home_joint_pos[: len(self.arm_joint_ids)], device=self.device
-            ).unsqueeze(0)
-        joint_pos[:, self.grip_joint_ids] = float(self.cfg.gripper_open)
-        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self._set_robot_home(env_ids)
 
         num_envs = env_ids.shape[0]
         start_center = torch.tensor(
@@ -218,18 +338,33 @@ class YamManipEnv(DirectRLEnv):
         self.arm_joint_ids = torch.tensor(arm_ids, device=self.device, dtype=torch.long)
         self.grip_joint_ids = torch.tensor(grip_ids, device=self.device, dtype=torch.long)
         self.ee_body_id = self.cfg.robot_entity.body_ids[0]
+        self.marker_body_ids, _ = self.robot.find_bodies(self.cfg.marker_body_names, preserve_order=True)
         self._entities_resolved = True
+
+    def _set_robot_home(self, env_ids) -> None:
+        joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
+        joint_vel = torch.zeros_like(joint_pos)
+        if len(self.cfg.home_joint_pos) >= len(self.arm_joint_ids):
+            joint_pos[:, self.arm_joint_ids] = torch.tensor(
+                self.cfg.home_joint_pos[: len(self.arm_joint_ids)], device=self.device
+            ).unsqueeze(0)
+        joint_pos[:, self.grip_joint_ids] = float(self.cfg.gripper_open)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
 
     def _update_site_marker(self, env_ids=None) -> None:
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
-        ee_pos_w = ee_pose_w[:, 0:3]
         ee_quat_w = ee_pose_w[:, 3:7]
+        if len(self.marker_body_ids) >= 2:
+            tip_pos_w = self.robot.data.body_state_w[:, self.marker_body_ids[:2], 0:3].mean(dim=1)
+        else:
+            tip_pos_w = ee_pose_w[:, 0:3]
         offset = torch.tensor(self.cfg.gripper_site_offset, device=self.device, dtype=torch.float32)
         offset = offset.unsqueeze(0).expand(ee_quat_w.shape[0], 3)
         offset_w = torch_utils.quat_apply(ee_quat_w, offset)
-        marker_pos = ee_pos_w + offset_w
+        marker_pos = tip_pos_w + offset_w
         marker_quat = ee_quat_w
         marker_state = self.site_marker.data.default_root_state[env_ids].clone()
         marker_state[:, 0:3] = marker_pos[env_ids]
