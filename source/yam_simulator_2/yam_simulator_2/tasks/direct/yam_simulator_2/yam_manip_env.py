@@ -236,7 +236,8 @@ class YamManipEnv(DirectRLEnv):
         jacobian = jacobian_w[:, self.ee_body_id - 1, :, self.arm_joint_ids]
         joint_pos = self.robot.data.joint_pos[:, self.arm_joint_ids]
 
-        self._ik.set_command(self.ee_pos_target_b, ee_quat=self.ee_quat_target_b)
+        ik_cmd = torch.cat([self.ee_pos_target_b, self.ee_quat_target_b], dim=-1)  # (N,7)
+        self._ik.set_command(ik_cmd)
         arm_q_des = self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
         self.robot.set_joint_position_target(arm_q_des, joint_ids=self.arm_joint_ids)
 
