@@ -130,6 +130,7 @@ class YamManipEnv(DirectRLEnv):
         self._debug_bad_obs = False
         self._debug_bad_rew = False
         self._debug_bad_tensors = set()
+        self._obs_step_counter = 0
 
     def _ensure_pose_buffers(self):
         """Create pose-related buffers if they are missing (e.g., after hot-reload)."""
@@ -303,6 +304,14 @@ class YamManipEnv(DirectRLEnv):
         if max_abs > self.cfg.debug_abs_max:
             print(f"[DEBUG] obs magnitude clamp: max_abs={max_abs.item():.3e}")
             obs = torch.clamp(obs, -self.cfg.debug_abs_max, self.cfg.debug_abs_max)
+
+        # Lightweight periodic print to inspect observations (every 100 env steps).
+        self._obs_step_counter += 1
+        if self._obs_step_counter % 100 == 0:
+            # Print only the first environment to keep logs readable.
+            sample = obs[0].detach().cpu()
+            print(f"[OBS@{self._obs_step_counter}] env0 obs min={sample.min():.3f} max={sample.max():.3f} first10={sample[:10].tolist()}")
+
         self._debug_check_tensor("obs", obs, "_debug_bad_obs")
         return {"policy": obs}
 
