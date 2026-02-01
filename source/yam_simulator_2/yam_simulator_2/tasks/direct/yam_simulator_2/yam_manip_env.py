@@ -130,6 +130,17 @@ class YamManipEnv(DirectRLEnv):
         self._debug_bad_rew = False
         self._debug_bad_tensors = set()
 
+    def _ensure_pose_buffers(self):
+        """Create pose-related buffers if they are missing (e.g., after hot-reload)."""
+        if not hasattr(self, "ee_pos_target_b"):
+            self.ee_pos_target_b = torch.zeros((self.num_envs, 3), device=self.device)
+        if not hasattr(self, "ee_quat_target_b"):
+            self.ee_quat_target_b = torch.zeros((self.num_envs, 4), device=self.device)
+        if not hasattr(self, "ee_quat_nominal_b"):
+            self.ee_quat_nominal_b = torch.zeros((self.num_envs, 4), device=self.device)
+        if not hasattr(self, "ee_yaw_target"):
+            self.ee_yaw_target = torch.zeros((self.num_envs,), device=self.device)
+
     def _setup_scene(self):
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
 
@@ -172,6 +183,7 @@ class YamManipEnv(DirectRLEnv):
 
     def _apply_action(self) -> None:
         self._resolve_robot_entities()
+        self._ensure_pose_buffers()
         delta_pos = torch.clamp(self.actions[:, 0:3], -1.0, 1.0)
         delta_pos = delta_pos * float(self.cfg.ee_delta_scale)
         delta_pos = torch.clamp(delta_pos, -float(self.cfg.ee_pos_limit), float(self.cfg.ee_pos_limit))
@@ -358,6 +370,7 @@ class YamManipEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         self._resolve_robot_entities()
+        self._ensure_pose_buffers()
         self.phase[env_ids] = 0
         self.sorted_mask[env_ids] = False
 
