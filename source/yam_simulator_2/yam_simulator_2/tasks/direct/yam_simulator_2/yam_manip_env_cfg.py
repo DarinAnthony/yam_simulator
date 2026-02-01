@@ -23,10 +23,11 @@ INCH = 0.0254
 TABLE_HEIGHT = 0.75
 # Table: 23.9 in × 59.8 in → 0.60706 m × 1.51892 m (swapped X/Y)
 TABLE_SIZE = (0.60706, 1.51892, 0.05)
-# Robot base placement: 1.5 in (0.0381 m) from the "top" edge (Y+), facing -X.
-# Top edge Y = +TABLE_SIZE[1]/2 = +0.75946 → base y = 0.75946 - 0.03810 = 0.72136
+# Robot base placement: 35.5 in (0.90170 m) from the left edge when facing -Y.
+# Left edge (facing -Y) lies at Y = +TABLE_SIZE[1]/2 = +0.75946 m.
+# Base Y = 0.75946 - 0.90170 = -0.14224 m
 ROBOT_BASE_X = 0.0
-ROBOT_BASE_Y = 0.72136
+ROBOT_BASE_Y = -0.14224
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
     (0.30, 0.00, TABLE_HEIGHT + INCH / 2.0),
