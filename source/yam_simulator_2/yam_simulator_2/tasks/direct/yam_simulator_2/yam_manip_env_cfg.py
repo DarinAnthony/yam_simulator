@@ -21,7 +21,11 @@ from ....assets import YAM_CFG
 
 INCH = 0.0254
 TABLE_HEIGHT = 0.75
-TABLE_SIZE = (1.0, 1.0, 0.05)
+# Table: 23.9 in × 59.8 in → 0.60706 m × 1.51892 m
+TABLE_SIZE = (1.51892, 0.60706, 0.05)
+# Robot base offset: 35.5 in from left edge (facing robot) on the long side → 0.90170 m
+# Left edge is at -TABLE_SIZE[0]/2, so base x = -0.75946 + 0.90170 = 0.14224 m
+ROBOT_BASE_X = 0.14224
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
     (0.30, 0.00, TABLE_HEIGHT + INCH / 2.0),
@@ -86,8 +90,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     tilt_scale: float = 0.15
     yaw_rate_limit: float = 0.25
     yaw_update_eps: float = 1e-3
-    gripper_open: float = -0.0475
-    gripper_closed: float = 0.0
+    gripper_open: float = -0.0425
+    gripper_closed: float = -0.005
     home_joint_pos: list[float] = [
         -0.003242542153047978,
         0.5556191348134583,
@@ -161,7 +165,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
 
     # robot(s)
     robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    robot_cfg.init_state.pos = (0.0, 0.0, TABLE_HEIGHT)
+    robot_cfg.init_state.pos = (ROBOT_BASE_X, 0.0, TABLE_HEIGHT)
 
     table_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Table",

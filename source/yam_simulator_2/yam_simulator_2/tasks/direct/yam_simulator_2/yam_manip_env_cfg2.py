@@ -21,7 +21,11 @@ from ....assets import YAM_CFG
 
 INCH = 0.0254
 TABLE_HEIGHT = 0.75
-TABLE_SIZE = (1.0, 1.0, 0.05)
+# Table: 23.9 in × 59.8 in → 0.60706 m × 1.51892 m
+TABLE_SIZE = (1.51892, 0.60706, 0.05)
+# Robot base offset: 35.5 in from left edge (facing robot) on the long side → 0.90170 m
+# Left edge is at -TABLE_SIZE[0]/2, so base x = -0.75946 + 0.90170 = 0.14224 m
+ROBOT_BASE_X = 0.14224
 BLOCK_SIZE = (INCH, INCH, INCH)
 BLOCK_POSITIONS = (
     (0.30, 0.00, TABLE_HEIGHT + INCH / 2.0),
@@ -107,30 +111,8 @@ class YamManipEnvCfg(DirectRLEnvCfg):
     carry_w: float = 2.0
     place_bonus: float = 10.0
     step_penalty_w: float = 0.01
-    smooth_w: float = 0.02
+    smooth_w: float = 0.01
     open_until_contact_w: float = 0.2
-    # Waypoint and smoothness shaping
-    hover_height: float = 0.08
-    pick_z_offset: float = 0.01
-    place_z_offset: float = 0.01
-    wp_gate_xy: float = 0.06
-    wp_gate_k: float = 40.0
-    wp_k: float = 10.0
-    wp_pick_w: float = 0.3
-    wp_place_w: float = 0.3
-    wp_progress_w: float = 0.5
-    tilt_smooth_w: float = 0.005
-    ee_vel_w: float = 0.004
-    ee_acc_w: float = 0.0004
-    clearance_w: float = 0.2
-    clearance_z: float = 0.04
-    table_contact_w: float = 0.3
-    table_clearance: float = 0.03
-    # Descend and close shaping
-    descend_w: float = 0.6
-    descend_k: float = 20.0
-    close_w: float = 0.8
-    close_z_gate: float = 0.02
 
     near_thresh: float = 0.03
     grip_closed_thresh: float = 0.8
@@ -161,7 +143,7 @@ class YamManipEnvCfg(DirectRLEnvCfg):
 
     # robot(s)
     robot_cfg: ArticulationCfg = YAM_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    robot_cfg.init_state.pos = (0.0, 0.0, TABLE_HEIGHT)
+    robot_cfg.init_state.pos = (ROBOT_BASE_X, 0.0, TABLE_HEIGHT)
 
     table_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Table",

@@ -127,8 +127,6 @@ class YamManipEnv(DirectRLEnv):
         self.phase = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.sorted_mask = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.bool)
         self.prev_actions = torch.zeros_like(self.actions)
-        self.prev_wp_dist = torch.zeros((self.num_envs,), device=self.device)
-        self.prev_ee_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
         self._debug_printed = False
         self._debug_bad_obs = False
         self._debug_bad_rew = False
@@ -422,93 +420,6 @@ class YamManipEnv(DirectRLEnv):
         r_open = float(self.cfg.open_until_contact_w) * torch.clamp(1.0 - grip_t, 0.0, 1.0) * open_mask
 
         reward = reward + r_smooth + r_open
-
-        # --- Waypoint / smooth pick-place shaping ---
-        active = phase < 3
-        near_thresh = float(self.cfg.near_thresh)
-        lift_height = float(self.cfg.lift_height)
-        grip_closed_thresh = float(self.cfg.grip_closed_thresh)
-
-        grip_closed = grip_t > grip_closed_thresh
-        near = d_reach < near_thresh
-        lifted = (tgt_block_pos[:, 2] - table_top_z) > lift_height
-        grasped = (near & grip_closed) | lifted
-
-        hover_h = float(self.cfg.hover_height)
-        pick_z_off = float(self.cfg.pick_z_offset)
-        place_z_off = float(self.cfg.place_z_offset)
-
-        wp_hover_block = tgt_block_pos.clone()
-        wp_hover_block[:, 2] = tgt_block_pos[:, 2] + hover_h
-        wp_pick_block = tgt_block_pos.clone()
-        wp_pick_block[:, 2] = tgt_block_pos[:, 2] + pick_z_off
-
-        xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
-        gate_block = torch.sigmoid(float(self.cfg.wp_gate_k) * (xy_block - float(self.cfg.wp_gate_xy)))
-        wp_block = wp_pick_block.clone()
-        wp_block[:, 2] = gate_block * wp_hover_block[:, 2] + (1.0 - gate_block) * wp_pick_block[:, 2]
-
-        wp_place = tgt_goal_pos.clone()
-        wp_place[:, 2] = float(table_top_z + block_half_z) + place_z_off
-        wp_hover_goal = wp_place.clone()
-        wp_hover_goal[:, 2] = wp_place[:, 2] + hover_h
-        xy_goal = torch.linalg.norm((grasp_pos - wp_place)[:, 0:2], dim=-1)
-        gate_goal = torch.sigmoid(float(self.cfg.wp_gate_k) * (xy_goal - float(self.cfg.wp_gate_xy)))
-        wp_goal = wp_place.clone()
-        wp_goal[:, 2] = gate_goal * wp_hover_goal[:, 2] + (1.0 - gate_goal) * wp_place[:, 2]
-
-        wp = torch.where(grasped.unsqueeze(-1), wp_goal, wp_block)
-        dist_wp = torch.linalg.norm(grasp_pos - wp, dim=-1)
-
-        r_wp_pick = float(self.cfg.wp_pick_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * (~grasped) * active
-        r_wp_place = float(self.cfg.wp_place_w) * (1.0 - torch.tanh(float(self.cfg.wp_k) * dist_wp)) * grasped * active
-
-        dist_prog = torch.where(grasped, xy_goal, xy_block)
-        r_prog = float(self.cfg.wp_progress_w) * (self.prev_wp_dist - dist_prog) * active
-        self.prev_wp_dist = dist_prog.detach()
-
-        aligned_xy = xy_block < float(self.cfg.wp_gate_xy)
-        z_pick = tgt_block_pos[:, 2] + pick_z_off
-        z_err_pick = torch.abs(grasp_pos[:, 2] - z_pick)
-        r_descend = (
-            float(self.cfg.descend_w)
-            * (1.0 - torch.tanh(float(self.cfg.descend_k) * z_err_pick))
-            * aligned_xy
-            * (~grasped)
-            * active
-        )
-
-        close_zone = aligned_xy & (z_err_pick < float(self.cfg.close_z_gate)) & (~lifted) & active
-        r_close = float(self.cfg.close_w) * grip_t * close_zone.to(torch.float32)
-
-        clearance = torch.clamp((tgt_block_pos[:, 2] + float(self.cfg.clearance_z)) - grasp_pos[:, 2], min=0.0)
-        far_xy = xy_block > float(self.cfg.wp_gate_xy)
-        r_clear = -float(self.cfg.clearance_w) * clearance * far_xy * (~grasped) * active
-
-        # EE velocity / acceleration penalties (small)
-        ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
-        r_vel = torch.zeros((self.num_envs,), device=self.device)
-        r_acc = torch.zeros((self.num_envs,), device=self.device)
-        if ee_state.shape[-1] >= 13:
-            ee_lin_vel = ee_state[:, 7:10]
-            r_vel = -float(self.cfg.ee_vel_w) * torch.sum(ee_lin_vel * ee_lin_vel, dim=-1) * active
-            acc = (ee_lin_vel - self.prev_ee_lin_vel) / float(self.physics_dt)
-            r_acc = -float(self.cfg.ee_acc_w) * torch.sum(acc * acc, dim=-1) * active
-            self.prev_ee_lin_vel = ee_lin_vel.detach()
-
-        # Tilt smoothness
-        d_tilt = self.actions[:, 3:5] - self.prev_actions[:, 3:5]
-        r_tilt_smooth = -float(self.cfg.tilt_smooth_w) * torch.sum(d_tilt * d_tilt, dim=-1) * active
-
-        reward = reward + r_wp_pick + r_wp_place + r_prog + r_clear + r_vel + r_acc + r_tilt_smooth + r_descend + r_close
-
-        # Penalty for any arm link dipping below table height (approximate contact).
-        arm_z = self.robot.data.body_state_w[:, :, 2] - self.scene.env_origins[:, 2].unsqueeze(1)
-        min_arm_z = arm_z.min(dim=1).values
-        table_top = table_top_z
-        contact_depth = torch.clamp(table_top - float(self.cfg.table_clearance) - min_arm_z, min=0.0)
-        r_table_contact = -float(self.cfg.table_contact_w) * contact_depth
-        reward = reward + r_table_contact
         if not torch.isfinite(reward).all():
             bad_env = (~torch.isfinite(reward)).nonzero(as_tuple=False).squeeze(-1)
             e = int(bad_env[0].item())
@@ -548,8 +459,6 @@ class YamManipEnv(DirectRLEnv):
         self.phase[env_ids] = 0
         self.sorted_mask[env_ids] = False
         self.prev_actions[env_ids] = 0.0
-        self.prev_wp_dist[env_ids] = 0.0
-        self.prev_ee_lin_vel[env_ids] = 0.0
 
         default_root_state = self.robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
@@ -618,25 +527,6 @@ class YamManipEnv(DirectRLEnv):
         self.ee_quat_nominal_b[env_ids] = ee_quat_b[env_ids]
         self._ik.reset()
         self._update_site_marker(env_ids=env_ids)
-        ee_state = self.robot.data.body_state_w[:, self.ee_body_id]
-        if ee_state.shape[-1] >= 13:
-            self.prev_ee_lin_vel[env_ids] = ee_state[env_ids, 7:10]
-        phase = self.phase
-        tgt_idx = torch.clamp(phase, 0, 2)
-        block_pos = torch.stack(
-            [
-                self.blue_block.data.root_pos_w - self.scene.env_origins,
-                self.red_block.data.root_pos_w - self.scene.env_origins,
-                self.yellow_block.data.root_pos_w - self.scene.env_origins,
-            ],
-            dim=1,
-        )
-        env_ids_all = torch.arange(self.num_envs, device=self.device)
-        tgt_block_pos = block_pos[env_ids_all, tgt_idx]
-        grasp_pos_w, _ = self._ee_grasp_pos_w()
-        grasp_pos = grasp_pos_w - self.scene.env_origins
-        xy_block = torch.linalg.norm((grasp_pos - tgt_block_pos)[:, 0:2], dim=-1)
-        self.prev_wp_dist[env_ids] = xy_block[env_ids].detach()
         self._debug_print_robot_state()
 
     def _resolve_robot_entities(self) -> None:

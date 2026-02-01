@@ -217,7 +217,8 @@ class YamManipEnv(DirectRLEnv):
             ee_pose_w[:, 3:7],
         )
 
-        self.ee_pos_target_b = self.ee_pos_target_b + delta_pos
+        # Make the target relative to the current EE pose to avoid drift to clamp corners.
+        self.ee_pos_target_b = ee_pos_b + delta_pos
         ee_min = torch.tensor([-0.25, -0.25, -0.10], device=self.device)
         ee_max = torch.tensor([0.45, 0.25, 0.35], device=self.device)
         self.ee_pos_target_b = torch.clamp(self.ee_pos_target_b, ee_min, ee_max)
@@ -264,24 +265,33 @@ class YamManipEnv(DirectRLEnv):
         self._resolve_robot_entities()
 
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
+        root_pos_w = root_pose_w[:, 0:3]
+        root_quat_w = root_pose_w[:, 3:7]
+
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_body_id, 0:7]
         ee_pos_b, _ = subtract_frame_transforms(
-            root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+            root_pos_w, root_quat_w, ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
 
         grip_t = self._grip_close_t().unsqueeze(-1)
 
-        red_pos = self.red_block.data.root_pos_w - self.scene.env_origins
-        blue_pos = self.blue_block.data.root_pos_w - self.scene.env_origins
-        yellow_pos = self.yellow_block.data.root_pos_w - self.scene.env_origins
+        def to_base(pos_w: torch.Tensor) -> torch.Tensor:
+            return torch_utils.quat_rotate_inverse(root_quat_w, pos_w - root_pos_w)
 
-        red_vel = self.red_block.data.root_lin_vel_w
-        blue_vel = self.blue_block.data.root_lin_vel_w
-        yellow_vel = self.yellow_block.data.root_lin_vel_w
+        def vel_to_base(vel_w: torch.Tensor) -> torch.Tensor:
+            return torch_utils.quat_rotate_inverse(root_quat_w, vel_w)
 
-        drop_r = self.dropoff_red.data.root_pos_w - self.scene.env_origins
-        drop_b = self.dropoff_blue.data.root_pos_w - self.scene.env_origins
-        drop_y = self.dropoff_yellow.data.root_pos_w - self.scene.env_origins
+        red_pos = to_base(self.red_block.data.root_pos_w)
+        blue_pos = to_base(self.blue_block.data.root_pos_w)
+        yellow_pos = to_base(self.yellow_block.data.root_pos_w)
+
+        red_vel = vel_to_base(self.red_block.data.root_lin_vel_w)
+        blue_vel = vel_to_base(self.blue_block.data.root_lin_vel_w)
+        yellow_vel = vel_to_base(self.yellow_block.data.root_lin_vel_w)
+
+        drop_r = to_base(self.dropoff_red.data.root_pos_w)
+        drop_b = to_base(self.dropoff_blue.data.root_pos_w)
+        drop_y = to_base(self.dropoff_yellow.data.root_pos_w)
 
         self._debug_check_tensor("ee_pos_b", ee_pos_b)
         self._debug_check_tensor("ee_pos_target_b", self.ee_pos_target_b)
@@ -296,20 +306,21 @@ class YamManipEnv(DirectRLEnv):
         self._debug_check_tensor("drop_b", drop_b)
         self._debug_check_tensor("drop_y", drop_y)
 
+        # Keep ordering consistent: blue, red, yellow (for both positions and goals).
         obs = compute_policy_obs(
             self.phase,
             self.sorted_mask,
             ee_pos_b,
             self.ee_pos_target_b,
             grip_t,
-            red_pos,
             blue_pos,
+            red_pos,
             yellow_pos,
-            red_vel,
             blue_vel,
+            red_vel,
             yellow_vel,
-            drop_r,
             drop_b,
+            drop_r,
             drop_y,
         )
         # Clamp to avoid huge magnitudes propagating into the policy (helps
